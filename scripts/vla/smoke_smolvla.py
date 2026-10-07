@@ -16,8 +16,8 @@ torch.set_num_threads(4)
 env_cfg = LiberoEnv(task="libero_spatial", task_ids=[0])
 envs = make_env(env_cfg, n_envs=1)
 venv = next(iter(next(iter(envs.values())).values()))
-pcfg = PreTrainedConfig.from_pretrained("lerobot/smolvla_libero")
-pcfg.pretrained_path = "lerobot/smolvla_libero"
+pcfg = PreTrainedConfig.from_pretrained("HuggingFaceVLA/smolvla_libero")
+pcfg.pretrained_path = "HuggingFaceVLA/smolvla_libero"
 pcfg.device = "cpu"
 print("chunk_size", pcfg.chunk_size, "n_action_steps", pcfg.n_action_steps, "num_steps", pcfg.num_steps)
 policy = make_policy(cfg=pcfg, env_cfg=env_cfg).eval()
