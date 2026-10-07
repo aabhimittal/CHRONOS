@@ -42,6 +42,7 @@ class HazardModel:
     horizon: float      # exposure in steps used to turn a per-step rate into success
     task: str = ""
     kind: str = "ruin"  # "ruin" (h = failure hazard) or "opportunity" (h = success rate)
+    h_miss: float | None = None   # fitted hazard of a held (dropped-action) step, if measured
 
     def hazard(self, s):
         idx = np.searchsorted(self.edges, np.asarray(s, float), side="right") - 1
@@ -68,6 +69,7 @@ class HazardModel:
         total = steps + held
         if total <= 0:
             return 1.0
+        h_miss = self.h_miss if self.h_miss is not None else h_miss
         extra = h_miss * held if self.kind == "ruin" else 0.0
         return float(self.from_rate((rate_sum + extra) / total))
 
@@ -76,14 +78,17 @@ class HazardModel:
         return float((self.hazard(s_values) * w).sum() / max(w.sum(), 1e-12))
 
     def to_json(self) -> str:
-        return json.dumps({"task": self.task, "kind": self.kind, "edges": [float(e) for e in self.edges],
-                           "h": self.h.tolist(), "horizon": self.horizon})
+        d = {"task": self.task, "kind": self.kind, "edges": [float(e) for e in self.edges],
+             "h": self.h.tolist(), "horizon": self.horizon}
+        if self.h_miss is not None:
+            d["h_miss"] = self.h_miss
+        return json.dumps(d)
 
     @classmethod
     def from_json(cls, text: str) -> "HazardModel":
         d = json.loads(text)
         return cls(np.array(d["edges"], float), np.array(d["h"], float), d["horizon"], d["task"],
-                   d.get("kind", "ruin"))
+                   d.get("kind", "ruin"), d.get("h_miss"))
 
 
 def bin_counts(trace, edges) -> np.ndarray:
@@ -92,13 +97,15 @@ def bin_counts(trace, edges) -> np.ndarray:
 
 
 def fit_hazard(traces, successes, edges=DEFAULT_EDGES, task="", ridge=1e-6,
-               kind="ruin") -> HazardModel:
+               kind="ruin", held=None) -> HazardModel:
     """MLE of a monotone piecewise-constant rate from rollout traces.
 
     traces: list of per-step staleness arrays (seconds); successes: bools.
     kind="ruin": y = success, rate nondecreasing (h = L @ delta, L lower-tri).
     kind="opportunity": the same likelihood with y = failure and the rate
     nonincreasing (L upper-triangular).
+    held: optional per-episode count of dropped-action steps (ruin only). Those
+    steps get their own nonnegative hazard h_miss on top of the staleness rate.
     """
     edges = np.asarray(edges, float)
     N = np.stack([bin_counts(t, edges) for t in traces]).astype(float)   # (E, B)
@@ -110,18 +117,25 @@ def fit_hazard(traces, successes, edges=DEFAULT_EDGES, task="", ridge=1e-6,
     else:
         L = np.tril(np.ones((B, B)))                                      # h_b = sum_{j<=b} delta_j
 
-    def nll(delta):
-        x = np.maximum(N @ (L @ delta), 1e-10)                            # (E,)
+    fit_miss = held is not None and kind == "ruin" and np.any(np.asarray(held) > 0)
+    hc = np.asarray(held, float) if fit_miss else np.zeros(len(y))
+
+    def nll(w):
+        delta, hm = (w[:-1], w[-1]) if fit_miss else (w, 0.0)
+        x = np.maximum(N @ (L @ delta) + hc * hm, 1e-10)                  # (E,)
         f = (y * x - (1 - y) * np.log(-np.expm1(-x))).sum() + ridge * delta @ delta
         g_x = y - (1 - y) / np.expm1(x)
-        return f, L.T @ (N.T @ g_x) + 2 * ridge * delta
+        g = L.T @ (N.T @ g_x) + 2 * ridge * delta
+        return f, (np.append(g, hc @ g_x) if fit_miss else g)
 
-    res = minimize(nll, np.full(B, 1e-3), jac=True, method="L-BFGS-B",
-                   bounds=[(0, None)] * B)
+    res = minimize(nll, np.full(B + fit_miss, 1e-3), jac=True, method="L-BFGS-B",
+                   bounds=[(0, None)] * (B + fit_miss))
+    h_miss = float(res.x[-1]) if fit_miss else None
+    res.x = res.x[:B]
     # exposure: ruin -> mean executed steps; opportunity -> the full episode
     # budget (chances keep coming until the timeout)
     horizon = float(N.sum(1).mean() if kind == "ruin" else N.sum(1).max())
-    return HazardModel(edges, L @ res.x, horizon, task, kind)
+    return HazardModel(edges, L @ res.x, horizon, task, kind, h_miss)
 
 
 # --- uncertainty -------------------------------------------------------------

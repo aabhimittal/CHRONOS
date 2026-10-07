@@ -38,7 +38,8 @@ def make_fleet(templates: list[Robot], n: int, seed: int = 0, aligned: bool = Fa
         t = templates[i % len(templates)]
         cyc = sum(d for _, d in t.phases) if t.phases else 0.0
         out.append(replace(t, phase=0.0 if aligned else float(rng.uniform(0, t.period)),
-                           cycle_offset=0.0 if aligned else float(rng.uniform(0, cyc))))
+                           cycle_offset=0.0 if aligned else float(rng.uniform(0, cyc)),
+                           seed=seed * 100003 + i, _sched=None))
     return out
 
 
@@ -91,4 +92,7 @@ def capacity(policy_factory, templates, models, lat=LatencyModel(), slo=SLO(),
             fails += 1
             if fails >= patience:
                 break
+    if best == 0 and n_start > 1:            # the warm start was already infeasible: scan from 1
+        return capacity(policy_factory, templates, models, lat, slo, horizon_s, n_max=n_start,
+                        patience=patience, seed=seed, n_start=1, sim_cls=sim_cls)
     return best, float(ref), log

@@ -101,6 +101,21 @@ for ax, t in zip(axs, ("mean success", "deadline-miss rate", "mean staleness (s)
 axs[0].legend(frameon=False, fontsize=8)
 fig.tight_layout(); fig.savefig(OUT / "figures/sweep.svg"); plt.close(fig)
 
+cal_path = OUT / "calibration.json"
+if cal_path.exists():
+    cal = json.loads(cal_path.read_text())
+    fig, ax = plt.subplots(figsize=(4, 3.4))
+    for (task, d), col in zip(sorted(cal.items()), ("#e0703a", "#2a7de1")):
+        ob = [r["observed"] for r in d["rows"]]
+        pr = [r["predicted"] for r in d["rows"]]
+        se = [2 * r["se"] for r in d["rows"]]
+        ax.errorbar(ob, pr, xerr=se, fmt="o", ms=3, color=col, label=f"{task} (MAE {d['mae']:.3f})", alpha=0.8)
+    ax.plot([0, 1], [0, 1], c="gray", ls=":")
+    ax.set(xlabel="observed success (held-out setting, ±2 SE)", ylabel="predicted success",
+           title="Held-out calibration", xlim=(0.3, 1.02), ylim=(0.3, 1.02))
+    ax.legend(frameon=False, fontsize=8)
+    fig.tight_layout(); fig.savefig(OUT / "figures/calibration.svg"); plt.close(fig)
+
 fig, ax = plt.subplots(figsize=(4, 3.4))
 o = np.array([[p["sim"], p["oracle"]] for p in pts])
 ax.plot([0, o.max() * 1.05], [0, o.max() * 1.05], c="gray", ls=":")

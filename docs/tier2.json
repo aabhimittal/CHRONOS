@@ -1,0 +1,136 @@
+{
+ "whittle": {
+  "toy mix": {
+   "greedy": 49,
+   "whittle": 49
+  },
+  "gradual + cliff": {
+   "greedy": 22,
+   "whittle": 0
+  }
+ },
+ "elastic": [
+  {
+   "n": 80,
+   "act_ms": 27.999999999999996,
+   "fixed": {
+    "miss_rate": 0.0,
+    "success": 0.7807536068930644
+   },
+   "elastic": {
+    "miss_rate": 0.0,
+    "success": 0.7807536068930644
+   }
+  },
+  {
+   "n": 100,
+   "act_ms": 34.0,
+   "fixed": {
+    "miss_rate": 0.9783274834252604,
+    "success": 0.7437249851359313
+   },
+   "elastic": {
+    "miss_rate": 0.0,
+    "success": 0.7799159692615071
+   }
+  },
+  {
+   "n": 120,
+   "act_ms": 39.99999999999999,
+   "fixed": {
+    "miss_rate": 0.9908525260029718,
+    "success": 0.675792409964813
+   },
+   "elastic": {
+    "miss_rate": 0.0,
+    "success": 0.7794499673315619
+   }
+  },
+  {
+   "n": 160,
+   "act_ms": 51.99999999999999,
+   "fixed": {
+    "miss_rate": 0.9931906614785992,
+    "success": 0.6030417898250583
+   },
+   "elastic": {
+    "miss_rate": 0.0,
+    "success": 0.778374467122803
+   }
+  }
+ ],
+ "partition": {
+  "time-sliced": 49,
+  "fa=0.2 interference=1.0": 40,
+  "fa=0.3 interference=1.0": 44,
+  "fa=0.4 interference=1.0": 36,
+  "fa=0.2 interference=1.15": 31,
+  "fa=0.3 interference=1.15": 36,
+  "fa=0.4 interference=1.15": 30
+ },
+ "events": [
+  {
+   "rate": 0.1,
+   "n": 32,
+   "age (curve-blind)": 0.9235343991311984,
+   "age (curve-aware)": 0.9268006230670849,
+   "event-triggered": 0.9620127330296818
+  },
+  {
+   "rate": 0.1,
+   "n": 64,
+   "age (curve-blind)": 0.8626611280988683,
+   "age (curve-aware)": 0.8664463738228431,
+   "event-triggered": 0.9482096626900107
+  },
+  {
+   "rate": 0.1,
+   "n": 96,
+   "age (curve-blind)": 0.7965881962359411,
+   "age (curve-aware)": 0.8003418874183227,
+   "event-triggered": 0.9185820249333171
+  },
+  {
+   "rate": 0.3,
+   "n": 32,
+   "age (curve-blind)": 0.8071616272992895,
+   "age (curve-aware)": 0.8053507492261494,
+   "event-triggered": 0.8994567396989986
+  },
+  {
+   "rate": 0.3,
+   "n": 64,
+   "age (curve-blind)": 0.7026885640219545,
+   "age (curve-aware)": 0.7108501539198719,
+   "event-triggered": 0.8754399892118571
+  },
+  {
+   "rate": 0.3,
+   "n": 96,
+   "age (curve-blind)": 0.6649961535944265,
+   "age (curve-aware)": 0.6616640520487362,
+   "event-triggered": 0.8188991821492815
+  },
+  {
+   "rate": 1.0,
+   "n": 32,
+   "age (curve-blind)": 0.6451562022967389,
+   "age (curve-aware)": 0.648772746921277,
+   "event-triggered": 0.7917646768373997
+  },
+  {
+   "rate": 1.0,
+   "n": 64,
+   "age (curve-blind)": 0.48160618989995174,
+   "age (curve-aware)": 0.48880884252618595,
+   "event-triggered": 0.7012390124586687
+  },
+  {
+   "rate": 1.0,
+   "n": 96,
+   "age (curve-blind)": 0.4419208099617566,
+   "age (curve-aware)": 0.44013893197553683,
+   "event-triggered": 0.5163323316930288
+  }
+ ]
+}

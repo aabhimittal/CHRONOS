@@ -70,13 +70,62 @@ class Robot:
     cycle_offset: float = 0.0
     start: float = 0.0        # joins the fleet
     stop: float = math.inf    # leaves the fleet
+    phase_sigma: float = 0.0  # lognormal jitter on phase durations (stochastic work cycles)
+    seed: int = 0
+    _sched: list = field(default=None, repr=False, compare=False)   # realised (start, end, idx)
 
     @property
     def period(self): return self.chunk / self.hz
 
+    def _realised(self, t):
+        """Realised phase schedule (random durations) extended to cover t."""
+        if self._sched is None:
+            self._sched, self._rng = [], np.random.default_rng(self.seed)
+            self._sched.append((-self.cycle_offset, -self.cycle_offset + self._draw(0), 0))
+        while self._sched[-1][1] <= t:
+            _, end, idx = self._sched[-1]
+            nxt = (idx + 1) % len(self.phases)
+            self._sched.append((end, end + self._draw(nxt), nxt))
+        return self._sched
+
+    def _draw(self, idx):
+        return self.phases[idx][1] * float(np.exp(self._rng.normal(0, self.phase_sigma)))
+
+    def phase_state(self, t):
+        """(phase index, time already spent in it): what a robot can report."""
+        if not self.phase_sigma:
+            cyc = sum(d for _, d in self.phases)
+            x = (t + self.cycle_offset) % cyc
+            for idx, (_, d) in enumerate(self.phases):
+                if x < d:
+                    return idx, x
+                x -= d
+            return len(self.phases) - 1, self.phases[-1][1]
+        sched = self._realised(t)
+        lo = max(0, len(sched) - 64)
+        for s0, s1, idx in reversed(sched[lo:]):
+            if s0 <= t < s1:
+                return idx, t - s0
+        return sched[0][2], 0.0
+
+    def predict_task(self, t: float, x: float) -> str:
+        """Task expected x seconds from now, from the current phase, time in
+        it, and *nominal* durations (no knowledge of the realised schedule)."""
+        if not self.phases:
+            return self.task
+        idx, e = self.phase_state(t)
+        rem = max(self.phases[idx][1] - e, 0.0)
+        while x >= rem:
+            x -= rem
+            idx = (idx + 1) % len(self.phases)
+            rem = self.phases[idx][1]
+        return self.phases[idx][0]
+
     def task_at(self, t: float) -> str:
         if not self.phases:
             return self.task
+        if self.phase_sigma:
+            return self.phases[self.phase_state(t)[0]][0]
         x = (t + self.cycle_offset) % sum(d for _, d in self.phases)
         for task, d in self.phases:
             if x < d:
@@ -167,7 +216,11 @@ class Simulator:
 
     # --- GPU launches ---------------------------------------------------
     def run_actions(self, t, jobs, k=None):
-        t_end = t + self.lat.act(len(jobs), k)
+        return self.finish_actions(t, t + self.lat.act(len(jobs), k), jobs, k)
+
+    def finish_actions(self, t, t_end, jobs, k=None):
+        """Bookkeeping for an action batch that ran on [t, t_end] (simulated
+        or real: chronos.runtime calls this with wall-clock times)."""
         dh = self.lat.denoise_hazard.get(k, 0.0) if k else 0.0
         for d, i in jobs:
             r, st = self.robots[i], self.stats[i]
@@ -187,10 +240,16 @@ class Simulator:
         self.in_flight[list(rids)] = True
 
     def run_vlm_slice(self, t, quantum):
-        rids, t0s, rem = self.vlm_batch
+        rem = self.vlm_batch[2]
         work = min(rem, quantum)
         t_end = t + work + (self.lat.slice_overhead if math.isfinite(quantum) else 0.0)
-        self.vlm_batch[2] = rem - work
+        return self.finish_slice(t, t_end, rem - work)
+
+    def finish_slice(self, t, t_end, remaining):
+        """Bookkeeping for a VLM slice on [t, t_end] leaving `remaining` work;
+        the batch's plans land when remaining reaches zero."""
+        rids, t0s, _ = self.vlm_batch
+        self.vlm_batch[2] = remaining
         if self.record:
             self.trace.append(("vlm", t, t_end, len(rids)))
         if self.vlm_batch[2] <= 1e-12:
@@ -259,6 +318,8 @@ class ChronosPolicy:
     * Phase lookahead (`lookahead=True`): the gain is evaluated under the task
       the robot will be in when the plan lands (t + L), so a robot about to
       enter a critical phase (e.g. grasp) is refreshed *before* it gets there.
+      True uses the realised schedule (an oracle); "predict" uses only the
+      robot's current phase, time in it, and nominal durations.
     """
 
     def __init__(self, quantum=0.010, max_batch=64, guard=0.002, models=None,
@@ -298,10 +359,36 @@ class ChronosPolicy:
         """Hazard reduction from refreshing now. With lookahead, the new plan
         is used from t+L until the following one lands (~t+2L), so take the
         worst task over that window."""
-        r, age = sim.robots[i], t - sim.plan_t0[i]
-        ks = (1, 2) if self.lookahead else (0,)
-        return max(float(self.models[r.task_at(t + k * lat)].cost(age + max(k, 1) * lat)
-                         - self.models[r.task_at(t + k * lat)].cost(max(k, 1) * lat)) for k in ks)
+        return float(self._gains(sim, t, [i], lat)[0])
+
+    def _gains(self, sim, t, idx, lat):
+        """Vectorised _gain over robots `idx`: robots are grouped by the task
+        they will be in, and each group's curve is evaluated once."""
+        idx = np.asarray(idx)
+        age = t - sim.plan_t0[idx]
+        best = np.full(len(idx), -np.inf)
+        # "predict" also scores the current phase (k=0): a phase that overruns
+        # its nominal length must not be predicted away, so prediction can only
+        # add urgency. Measured: worth it while phase durations are predictable
+        # (lognormal sigma <= ~0.3); at sigma 0.6 current-phase-only does better.
+        ks = (0, 1, 2) if self.lookahead == "predict" else (1, 2) if self.lookahead else (0,)
+        for k in ks:
+            if self.lookahead == "predict" and k > 0:
+                tasks = np.array([sim.robots[i].predict_task(t, k * lat) for i in idx])
+            else:
+                tasks = np.array([sim.robots[i].task_at(t + k * lat) for i in idx])
+            kk = max(k, 1)
+            for task in set(tasks.tolist()):
+                sel = tasks == task
+                m = self.models[task]
+                best[sel] = np.maximum(best[sel], m.cost(age[sel] + kk * lat) - m.cost(kk * lat))
+        return best
+
+    def quantum(self, sim):
+        """Slice budget the laxity test must reserve: the nominal quantum, or
+        the executor's preemption granularity if coarser (real runtimes can
+        only yield between layers)."""
+        return max(self.q, getattr(sim, "slice_granularity", 0.0))
 
     def _select(self, sim, t, idle):
         cap = min(self.max_batch, sim.lat.max_vlm_batch)
@@ -309,8 +396,10 @@ class ChronosPolicy:
         if not self.models:
             return idle[:cap]
         lat = sim.lat.vlm(min(len(idle), cap))
-        score = self._whittle if self.index == "whittle" else self._gain
-        gain = {i: score(sim, t, i, lat) for i in idle}
+        if self.index == "whittle":
+            gain = {i: self._whittle(sim, t, i, lat) for i in idle}
+        else:
+            gain = dict(zip(idle, self._gains(sim, t, idle, lat).tolist()))
         need = [i for i in idle if gain[i] > 1e-9 or t - sim.plan_t0[i] >= self.max_age]
         need.sort(key=lambda i: -gain[i])
         return (need or idle[: self.min_batch])[:cap]
@@ -325,7 +414,7 @@ class ChronosPolicy:
         if sim.pending:
             d = min(d for d, _ in sim.pending)
             laxity = d - t - worst_case - self.guard
-            if sim.vlm_batch and laxity >= self.q + sim.lat.slice_overhead:
+            if sim.vlm_batch and laxity >= self.quantum(sim) + sim.lat.slice_overhead:
                 return sim.run_vlm_slice(t, self.q)
             if not sim.vlm_batch and laxity > 1e-9:          # tolerance: a 1e-17 'wait' would skip the job
                 return min(sim.next_event(), d - worst_case - self.guard)

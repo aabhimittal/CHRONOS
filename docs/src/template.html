@@ -55,6 +55,8 @@ select { font: inherit; padding: 6px 8px; border: 1px solid var(--rule); border-
 .chip { font: 600 0.7rem/1 var(--mono); padding: 3px 6px; border-radius: 3px; width: fit-content }
 .chip.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent) }
 .chip.bad { color: var(--stall); background: color-mix(in srgb, var(--stall) 14%, transparent) }
+.chip.neu { color: var(--muted); background: var(--soft) }
+td.area { font: 600 0.72rem var(--body); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); white-space: nowrap }
 .verdict { font: 600 1rem/1.4 var(--body); padding: 10px 14px; border-radius: 6px; border-left: 4px solid var(--ok); background: var(--panel) }
 .verdict.bad { border-left-color: var(--stall) }
 .chart { display: grid; gap: 8px; min-width: 0 }
@@ -159,6 +161,11 @@ code { font: 0.85em var(--mono) }
     <div class="grid2">
       <div class="panel chart"><span class="lbl">Robots per GPU within SLO</span><table id="cap-table"></table></div>
       <div class="panel chart"><span class="lbl">Two more results</span><table id="more-table"></table></div>
+    </div>
+    <div class="panel chart">
+      <span class="lbl">Findings: what helped, what didn't, and what broke</span>
+      <div style="overflow-x:auto"><table id="findings"></table></div>
+      <p class="cap">Each row is reproducible with the script named in the README. "Hurts" rows are kept on purpose: they mark ideas that sounded right and failed in simulation.</p>
     </div>
   </section>
 
@@ -306,9 +313,14 @@ function renderStatic() {
   sweepChart("sw-st", "mean_staleness", 2, v => v.toFixed(1), 1.0);
   $("sw-legend").innerHTML = Object.keys(COLORS).map(k => `<span><i style="background:var(${COLORS[k]})"></i>${k}</span>`).join("")
     + `<span><i style="background:var(--stall)"></i>SLO limit</span>`;
-  const cap = DATA.capacity, mx = Math.max(...Object.values(cap));
-  $("cap-table").innerHTML = "<tr><th>Scheduler</th><th></th><th style='text-align:right'>Robots</th></tr>" + Object.entries(cap).map(([k, v]) =>
-    `<tr><td>${k}</td><td style="width:40%"><div class="bar" style="width:${v / mx * 100}%;background:var(${k.startsWith("FIFO") ? "--fifo" : k.startsWith("Oracle") ? "--vlm" : k === "Dedicated" ? "--muted" : "--act"})"></div></td><td class="n">${v}</td></tr>`).join("");
+  const cap = DATA.capacity, mx = Math.max(...Object.values(cap)), ci = DATA.ci || {};
+  const ciFor = k => Object.entries(ci).find(([c]) => c.split(" (")[0] === k.split(" (")[0] && (c.includes("aware") === k.includes("aware")))?.[1];
+  $("cap-table").innerHTML = "<tr><th>Scheduler</th><th></th><th style='text-align:right'>Robots</th><th style='text-align:right'>90% interval</th></tr>" + Object.entries(cap).map(([k, v]) => {
+    const c = ciFor(k);
+    return `<tr><td>${k}</td><td style="width:34%"><div class="bar" style="width:${v / mx * 100}%;background:var(${k.startsWith("FIFO") ? "--fifo" : k.startsWith("Oracle") ? "--vlm" : k === "Dedicated" ? "--muted" : "--act"})"></div></td><td class="n">${v}</td><td class="n">${c ? `${c.lo}–${c.hi}` : "–"}</td></tr>`;
+  }).join("");
+  $("findings").innerHTML = "<tr><th>Area</th><th>Experiment</th><th>Result</th><th></th></tr>" + (DATA.findings || []).map(f =>
+    `<tr><td class="area">${f.area}</td><td>${f.what}</td><td>${f.result}</td><td><span class="chip ${{helps: "ok", hurts: "bad"}[f.verdict] || "neu"}">${f.verdict}</span></td></tr>`).join("");
   const ph = DATA.phase, pl = DATA.placement;
   $("more-table").innerHTML = `<tr><th>Experiment</th><th style='text-align:right'>Result</th></tr>
     <tr><td>Pick cycle (4 s transit, 2 s grasp): refresh <b>ahead</b> of the grasp phase</td><td class="n">${ph["phase lookahead"]} robots</td></tr>
