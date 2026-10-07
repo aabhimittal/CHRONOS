@@ -37,8 +37,9 @@ def test_whittle_linear_cost_grows_quadratically():
 
 
 def test_whittle_saturates_past_a_cliff():
-    """Documented failure mode: past the knee W = C (knee - L) is constant,
-    so cliff robots stop gaining urgency (greedy is the default for this reason)."""
+    """Past the knee W = C (knee - L) is constant: cliff robots stop gaining
+    urgency once over the cliff, so the policy must refresh them *before* it
+    (the 2L anticipation window); without it Whittle loses badly."""
     w = [whittle(a, CLIFF) for a in (1.0, 1.5, 2.5)]
     assert w[0] == pytest.approx(w[1], rel=0.05) and w[1] == pytest.approx(w[2], rel=0.05)
     assert w[0] == pytest.approx(60 * 3e-2 * (0.75 - 0.1), rel=0.05)

@@ -46,8 +46,11 @@ def findings():
           f"items/hour per GPU {sp['best_fixed']:.1f} → {sp['best_governed']:.1f} ({sp['best_governed'] / sp['best_fixed'] - 1:+.0%})", "helps")
     if t2:
         w = t2["whittle"]
-        F("feature", "Whittle index instead of greedy refresh",
-          f"toy {w['toy mix']['whittle']} vs {w['toy mix']['greedy']}; gradual+cliff {w['gradual + cliff']['whittle']} vs {w['gradual + cliff']['greedy']} (index saturates past a cliff)", "hurts")
+        gc, toy = w["gradual + cliff"], w["toy mix"]
+        verdict = ("helps" if gc["whittle"] > gc["greedy"] and toy["whittle"] >= toy["greedy"] - 2
+                   else "hurts" if gc["whittle"] < gc["greedy"] else "neutral")
+        F("feature", "Whittle index instead of greedy refresh (same anticipation window)",
+          f"gradual+cliff fleet {gc['whittle']} vs {gc['greedy']}; toy {toy['whittle']} vs {toy['greedy']}", verdict)
         e = next(r for r in t2["elastic"] if r["n"] == 120)
         F("feature", "Elastic action head (fewer denoising steps under overload)",
           f"misses {e['fixed']['miss_rate']:.0%} → {e['elastic']['miss_rate']:.0%} at 120 robots, 30 Hz (quality cost assumed)", "helps")

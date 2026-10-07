@@ -1,0 +1,108 @@
+{
+ "phase_prediction": [
+  {
+   "sigma": 0.0,
+   "oracle lookahead": 48,
+   "predicted (robust)": 46,
+   "current phase only": 30
+  },
+  {
+   "sigma": 0.3,
+   "oracle lookahead": 49,
+   "predicted (robust)": 40,
+   "current phase only": 38
+  },
+  {
+   "sigma": 0.6,
+   "oracle lookahead": 49,
+   "predicted (robust)": 30,
+   "current phase only": 37
+  }
+ ],
+ "online": {
+  "calibration": 1.53125,
+  "rows": [
+   {
+    "offered": 60.0,
+    "policy": "admit all",
+    "admitted": 126,
+    "requests": 126,
+    "peak_live": 59,
+    "miss_rate": 0.0,
+    "success": 0.9817604870471165,
+    "success_p5": 0.9124092503643716
+   },
+   {
+    "offered": 60.0,
+    "policy": "oracle",
+    "admitted": 83,
+    "requests": 126,
+    "peak_live": 34,
+    "miss_rate": 0.0,
+    "success": 1.0,
+    "success_p5": 1.0
+   },
+   {
+    "offered": 60.0,
+    "policy": "oracle, calibrated",
+    "admitted": 114,
+    "requests": 126,
+    "peak_live": 52,
+    "miss_rate": 0.0,
+    "success": 0.9925955954649941,
+    "success_p5": 0.9685534247230965
+   },
+   {
+    "offered": 90.0,
+    "policy": "admit all",
+    "admitted": 191,
+    "requests": 191,
+    "peak_live": 79,
+    "miss_rate": 0.0,
+    "success": 0.8987573201987274,
+    "success_p5": 0.702458169536893
+   },
+   {
+    "offered": 90.0,
+    "policy": "oracle",
+    "admitted": 92,
+    "requests": 191,
+    "peak_live": 34,
+    "miss_rate": 0.0,
+    "success": 1.0,
+    "success_p5": 1.0
+   },
+   {
+    "offered": 90.0,
+    "policy": "oracle, calibrated",
+    "admitted": 142,
+    "requests": 191,
+    "peak_live": 52,
+    "miss_rate": 0.0,
+    "success": 0.9880384380430777,
+    "success_p5": 0.9663118269752152
+   }
+  ]
+ },
+ "h_miss": {
+  "shelf": 0.0,
+  "conveyor": 0.0
+ },
+ "gpu_mix": {
+  "capacity": {
+   "big (1.0x latency, $1.00/h)": 60,
+   "mid (1.8x, $0.45/h)": 27,
+   "small (3.5x, $0.25/h)": 9
+  },
+  "plan": {
+   "big (1.0x latency, $1.00/h)": 4,
+   "mid (1.8x, $0.45/h)": 6
+  },
+  "cost": 6.7,
+  "single_type_cost": {
+   "big (1.0x latency, $1.00/h)": 7.0,
+   "mid (1.8x, $0.45/h)": 6.75,
+   "small (3.5x, $0.25/h)": 11.25
+  }
+ }
+}

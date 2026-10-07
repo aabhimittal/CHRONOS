@@ -349,11 +349,17 @@ class ChronosPolicy:
             W(a) = a c(a+L) - int_L^{a+L} c(u) du      (>= 0 for nondecreasing c),
         the continuous analogue of the age-of-information Whittle index. Cost
         c is weighted by the task's exposure (horizon) so tasks are comparable."""
-        r, a = sim.robots[i], t - sim.plan_t0[i]
-        m = self.models[r.task_at(t + lat if self.lookahead else t)]
-        u = np.linspace(lat, a + lat, 32)
-        c = m.cost(u) - m.cost(lat)                     # shift so c(L) = 0; W is shift-invariant
-        return float(m.horizon * (a * c[-1] - np.trapezoid(c, u)))
+        r, a0 = sim.robots[i], t - sim.plan_t0[i]
+        best = 0.0
+        # same usage window as the greedy rule: the plan refreshed now is in use
+        # until ~t+2L, so also score the robot as it will be one latency later
+        for k in ((1, 2) if self.lookahead else (1,)):
+            a = a0 + (k - 1) * lat
+            m = self.models[r.task_at(t + k * lat if self.lookahead else t)]
+            u = np.linspace(lat, a + lat, 32)
+            c = m.cost(u) - m.cost(lat)                 # shift so c(L) = 0; W is shift-invariant
+            best = max(best, float(m.horizon * (a * c[-1] - np.trapezoid(c, u))))
+        return best
 
     def _gain(self, sim, t, i, lat):
         """Hazard reduction from refreshing now. With lookahead, the new plan

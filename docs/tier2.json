@@ -2,11 +2,11 @@
  "whittle": {
   "toy mix": {
    "greedy": 49,
-   "whittle": 49
+   "whittle": 48
   },
   "gradual + cliff": {
    "greedy": 22,
-   "whittle": 0
+   "whittle": 24
   }
  },
  "elastic": [
