@@ -5,6 +5,7 @@ import pathlib
 
 from chronos.admission import SLO, capacity
 from chronos.hazard import HazardModel
+from chronos.oracle import fast_capacity
 from chronos.sim import ChronosPolicy, FifoPolicy, LatencyModel, Robot
 
 ap = argparse.ArgumentParser()
@@ -16,18 +17,24 @@ ap.add_argument("--hz", type=float, default=10.0)
 ap.add_argument("--chunk", type=int, default=1)
 ap.add_argument("--horizon", type=float, default=20.0, help="simulated seconds per N")
 ap.add_argument("--latency", default="{}", help='JSON overrides, e.g. {"vlm_per":0.01}')
+ap.add_argument("--latency-file", help="LatencyModel JSON from scripts/profile_latency.py")
 args = ap.parse_args()
 
 models = {p.stem: HazardModel.from_json(p.read_text()) for p in pathlib.Path(args.curves).glob("*.json")}
-lat = LatencyModel(**json.loads(args.latency))
+base = json.loads(open(args.latency_file).read()) if args.latency_file else {}
+lat = LatencyModel(**{**base, **json.loads(args.latency)})
 slo = SLO(args.eps, args.s_max, args.delta)
 tpl = lambda **kw: [Robot(t, hz=args.hz, chunk=args.chunk, **kw) for t in sorted(models)]
 
 rows = []
-n, ref, _ = capacity(lambda: ChronosPolicy(models=models, max_age=args.s_max), tpl(), models, lat, slo, args.horizon)
+est = fast_capacity(tpl(), models, lat, slo)
+seed = max(1, int(0.5 * est))
+n, ref, _ = capacity(lambda: ChronosPolicy(models=models, max_age=args.s_max), tpl(), models, lat, slo,
+                     args.horizon, n_start=seed)
 rows.append(("chronos (EDF + sliced VLM, curve-aware batches)", n))
-n, _, _ = capacity(lambda: ChronosPolicy(), tpl(), models, lat, slo, args.horizon)
+n, _, _ = capacity(lambda: ChronosPolicy(), tpl(), models, lat, slo, args.horizon, n_start=seed)
 rows.append(("chronos (curve-blind, refresh all)", n))
+rows.append(("oracle prediction (closed form, curve-blind)", est))
 best = max((capacity(FifoPolicy, tpl(vlm_period=p), models, lat, slo, args.horizon)[0], p)
            for p in (0.1, 0.2, 0.5, 1.0, 2.0))
 rows.append((f"fifo batching (best refresh period {best[1]}s)", best[0]))

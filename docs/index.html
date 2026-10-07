@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Interactive simulator: how many VLA robots can one GPU serve under deadline and staleness SLOs?">
+</head>
+<body>
+<title>CHRONOS Fleet Simulator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,500..800&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: dispatch console. Controls rail left, live instruments right, sweep results below. */
+:root {
+  --bg: #eef2f0; --panel: #ffffff; --ink: #14201c; --muted: #56675f; --rule: #d3dcd8;
+  --act: #1f63d6; --vlm: #7c4ddb; --fifo: #c9561f; --stall: #c42d4a; --ok: #17794a; --soft: #e3eae7;
+  --display: "Archivo", "Arial Narrow", system-ui, sans-serif;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0e1412; --panel: #151d1a; --ink: #e2ebe7; --muted: #92a39c; --rule: #2a3632;
+  --act: #5d9bff; --vlm: #a78bfa; --fifo: #f08a52; --stall: #ff6b84; --ok: #45c486; --soft: #1c2622; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0e1412; --panel: #151d1a; --ink: #e2ebe7; --muted: #92a39c; --rule: #2a3632;
+  --act: #5d9bff; --vlm: #a78bfa; --fifo: #f08a52; --stall: #ff6b84; --ok: #45c486; --soft: #1c2622; color-scheme: dark }
+* { box-sizing: border-box }
+body { background: var(--bg); color: var(--ink); font: 15px/1.5 var(--body); }
+.wrap { max-width: 1180px; margin: 0 auto; padding-inline: 20px; padding-block: 28px 56px; display: grid; gap: 28px }
+header { display: grid; gap: 8px }
+h1 { font: 800 clamp(2.2rem, 6vw, 3.6rem)/0.95 var(--display); font-stretch: 78%; letter-spacing: -0.01em; margin: 0 }
+h1 small { display: block; font: 500 0.95rem/1.3 var(--body); letter-spacing: 0; color: var(--muted); margin-top: 8px; font-stretch: 100% }
+h2 { font: 700 1.25rem/1.2 var(--display); font-stretch: 85%; margin: 0; text-wrap: balance }
+.lede { max-width: 68ch; margin: 0; color: var(--ink) }
+.note { display: inline-flex; gap: 6px; align-items: center; font: 500 0.78rem/1 var(--mono); color: var(--muted);
+  border: 1px solid var(--rule); border-radius: 4px; padding: 6px 8px; width: fit-content }
+.console { display: grid; grid-template-columns: minmax(250px, 300px) minmax(0, 1fr); gap: 20px; align-items: start }
+@media (max-width: 820px) { .console { grid-template-columns: minmax(0, 1fr) } }
+.panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 18px }
+form { display: grid; gap: 16px }
+.field { display: grid; gap: 6px }
+.field label, .lbl { font: 600 0.72rem/1 var(--body); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted) }
+.row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px }
+output { font: 500 0.95rem var(--mono); font-variant-numeric: tabular-nums }
+input[type=range] { width: 100%; accent-color: var(--act) }
+select { font: inherit; padding: 6px 8px; border: 1px solid var(--rule); border-radius: 6px; background: var(--panel); color: var(--ink) }
+.seg { display: grid; gap: 4px }
+.seg label { display: flex; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 6px;
+  cursor: pointer; font: 500 0.9rem var(--body); text-transform: none; letter-spacing: 0; color: var(--ink) }
+.seg input { accent-color: var(--act) }
+.seg label:has(input:checked) { border-color: var(--act); background: var(--soft) }
+.check { display: flex; gap: 8px; align-items: center; font-size: 0.9rem }
+.check input { accent-color: var(--stall); width: 16px; height: 16px }
+:focus-visible { outline: 2px solid var(--act); outline-offset: 2px }
+.dim { opacity: 0.45 }
+.instruments { display: grid; gap: 16px; min-width: 0 }
+.tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px }
+@media (max-width: 640px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)) } }
+.tile { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 12px 14px; display: grid; gap: 4px; min-width: 0 }
+.tile .v { font: 600 1.6rem/1.1 var(--mono); font-variant-numeric: tabular-nums }
+.tile .s { font: 500 0.75rem/1.3 var(--mono); color: var(--muted) }
+.chip { font: 600 0.7rem/1 var(--mono); padding: 3px 6px; border-radius: 3px; width: fit-content }
+.chip.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent) }
+.chip.bad { color: var(--stall); background: color-mix(in srgb, var(--stall) 14%, transparent) }
+.verdict { font: 600 1rem/1.4 var(--body); padding: 10px 14px; border-radius: 6px; border-left: 4px solid var(--ok); background: var(--panel) }
+.verdict.bad { border-left-color: var(--stall) }
+.chart { display: grid; gap: 8px; min-width: 0 }
+.chart .head { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 6px 14px }
+.legend { display: flex; gap: 12px; flex-wrap: wrap; font: 500 0.75rem var(--mono); color: var(--muted) }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px }
+canvas { width: 100%; height: 150px; display: block }
+svg { width: 100%; height: auto; display: block; overflow: visible }
+svg text { fill: var(--muted); font: 11px var(--mono) }
+.cap { margin: 0; font-size: 0.85rem; color: var(--muted); max-width: 72ch }
+.grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px }
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px }
+@media (max-width: 820px) { .grid3, .grid2 { grid-template-columns: minmax(0, 1fr) } }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem }
+td, th { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--rule) }
+td.n { font: 500 0.95rem var(--mono); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums }
+th { font: 600 0.72rem var(--body); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted) }
+.bar { height: 10px; background: var(--act); border-radius: 2px }
+section { display: grid; gap: 14px }
+footer { color: var(--muted); font-size: 0.85rem; display: grid; gap: 6px; max-width: 76ch }
+a { color: var(--act) }
+code { font: 0.85em var(--mono) }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important } }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>CHRONOS<small>Deadline-aware GPU serving for fleets of vision-language-action robots</small></h1>
+    <p class="lede">Each robot runs a slow planner (a vision-language model) and a fast action head that must answer every control tick. Share one GPU across the fleet and two things can go wrong: actions miss their deadline, or plans go stale. Move the sliders to see which one breaks first under each scheduler.</p>
+    <span class="note">Toy staleness curves · illustrative GPU latencies · simulation only</span>
+  </header>
+
+  <div class="console">
+    <form class="panel" id="controls" aria-label="Simulation settings">
+      <div class="field">
+        <div class="row"><label for="n">Robots on one GPU</label><output id="n-out" for="n">48</output></div>
+        <input type="range" id="n" min="1" max="160" value="48">
+      </div>
+      <div class="field">
+        <span class="lbl">Scheduler</span>
+        <div class="seg" role="radiogroup">
+          <label><input type="radio" name="pol" id="pol-aware" value="aware" checked>CHRONOS, curve-aware</label>
+          <label><input type="radio" name="pol" id="pol-blind" value="blind">CHRONOS, curve-blind</label>
+          <label><input type="radio" name="pol" id="pol-fifo" value="fifo">FIFO batching (LLM-style)</label>
+        </div>
+      </div>
+      <div class="field">
+        <div class="row"><label for="hz">Control rate</label></div>
+        <select id="hz"><option value="5">5 Hz</option><option value="10" selected>10 Hz</option><option value="20">20 Hz</option><option value="30">30 Hz</option></select>
+      </div>
+      <div class="field">
+        <div class="row"><label for="mix">Conveyor-pick share</label><output id="mix-out" for="mix">50%</output></div>
+        <input type="range" id="mix" min="0" max="100" step="5" value="50">
+      </div>
+      <div class="field">
+        <div class="row"><label for="vper">VLM cost per robot</label><output id="vper-out" for="vper">6.0 ms</output></div>
+        <input type="range" id="vper" min="2" max="12" step="0.5" value="6">
+      </div>
+      <div class="field" id="q-field">
+        <div class="row"><label for="q">VLM slice length</label><output id="q-out" for="q">10 ms</output></div>
+        <input type="range" id="q" min="5" max="40" step="1" value="10">
+      </div>
+      <div class="field dim" id="fp-field">
+        <div class="row"><label for="fp">FIFO refresh period</label><output id="fp-out" for="fp">0.5 s</output></div>
+        <input type="range" id="fp" min="0.2" max="2" step="0.1" value="0.5">
+      </div>
+      <label class="check"><input type="checkbox" id="stall"> Inject a 300 ms GPU stall at t = 3 s</label>
+    </form>
+
+    <div class="instruments">
+      <div class="verdict" id="verdict" role="status">Running…</div>
+      <div class="tiles">
+        <div class="tile"><span class="lbl">Deadline misses</span><span class="v" id="t-miss">–</span><span class="chip" id="c-miss">SLO ≤ 1%</span></div>
+        <div class="tile"><span class="lbl">Mean plan age</span><span class="v" id="t-st">–</span><span class="chip" id="c-st">SLO ≤ 1.0 s</span></div>
+        <div class="tile"><span class="lbl">p99 plan age</span><span class="v" id="t-p99">–</span><span class="s">99th percentile</span></div>
+        <div class="tile"><span class="lbl">Task success</span><span class="v" id="t-succ">–</span><span class="chip" id="c-succ">SLO ≥ −2 pts</span></div>
+      </div>
+      <div class="panel chart">
+        <div class="head"><h2>GPU timeline</h2>
+          <div class="legend"><span><i style="background:var(--act)"></i>action batch</span><span><i style="background:var(--vlm)"></i>VLM work</span><span><i style="background:var(--stall)"></i>stall</span><span>bar height = batch size</span></div></div>
+        <canvas id="gantt" role="img" aria-label="GPU activity over one second of simulated time"></canvas>
+        <p class="cap" id="gantt-cap">One second of simulated time, from 2.8 s to 3.8 s.</p>
+      </div>
+      <div class="panel chart">
+        <div class="head"><h2>How old are the plans robots act on?</h2>
+          <div class="legend"><span><i style="background:var(--muted)"></i>share of control steps</span><span><i style="background:var(--fifo)"></i>conveyor p(success|s)</span><span><i style="background:var(--act)"></i>shelf p(success|s)</span></div></div>
+        <svg id="hist" viewBox="0 0 640 220" role="img" aria-label="Histogram of plan staleness with fitted success curves"></svg>
+        <p class="cap" id="hist-cap"></p>
+      </div>
+    </div>
+  </div>
+
+  <section>
+    <h2>What the full sweep shows</h2>
+    <p class="cap">Precomputed by <code>scripts/make_report.py</code> at 10 Hz with a 50/50 task mix. The SLO is ≤ 1% deadline misses, mean plan age ≤ 1 s, and at most 2 points of success lost against a robot with a dedicated GPU.</p>
+    <div class="grid3">
+      <div class="panel chart"><span class="lbl">Task success vs fleet size</span><svg id="sw-succ" viewBox="0 0 320 200"></svg></div>
+      <div class="panel chart"><span class="lbl">Deadline-miss rate vs fleet size</span><svg id="sw-miss" viewBox="0 0 320 200"></svg></div>
+      <div class="panel chart"><span class="lbl">Mean plan age (s) vs fleet size</span><svg id="sw-st" viewBox="0 0 320 200"></svg></div>
+    </div>
+    <div class="legend" id="sw-legend"></div>
+    <div class="grid2">
+      <div class="panel chart"><span class="lbl">Robots per GPU within SLO</span><table id="cap-table"></table></div>
+      <div class="panel chart"><span class="lbl">Two more results</span><table id="more-table"></table></div>
+    </div>
+  </section>
+
+  <footer>
+    <p>Everything on this page comes from simulation. The staleness curves come from a toy moving-target task, and the GPU latency constants are illustrative, not profiled. These numbers show how the effects behave, not what a real fleet will do.</p>
+    <p>The page runs a JavaScript port of the Python simulator, and a test checks it matches the Python to 1e-6. Code, tests and caveats: <a href="https://github.com/aabhimittal/CHRONOS">github.com/aabhimittal/CHRONOS</a>.</p>
+  </footer>
+</div>
+
+<script>// Browser port of chronos/sim.py (ChronosPolicy, FifoPolicy, GPU stalls).
+// Kept line-for-line close to the Python; tests/test_demo_parity.py runs both
+// on identical fleets and checks the metrics agree.
+(function (root) {
+  const NB = 1001, BIN = 0.01;             // HIST_EDGES = 0, 0.01, ..., 10.0
+
+  function hazardModel(m) {
+    const edges = m.edges.map(e => (e === null || e >= 1e8 ? Infinity : e));
+    const hazard = s => {
+      let lo = 0, hi = edges.length;         // searchsorted(side="right") - 1
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (edges[mid] <= s) lo = mid + 1; else hi = mid; }
+      return m.h[Math.min(Math.max(lo - 1, 0), m.h.length - 1)];
+    };
+    const hEdges = Float64Array.from({ length: NB }, (_, k) => hazard(k * BIN));
+    return { hazard, hEdges, horizon: m.horizon, p: s => Math.exp(-m.horizon * hazard(s)) };
+  }
+
+  const Lat = (o = {}) => Object.assign({
+    vlm_fixed: 0.040, vlm_per: 0.006, act_fixed: 0.004, act_per: 0.0003,
+    slice_overhead: 0.001, max_vlm_batch: 64,
+    vlm(b) { return this.vlm_fixed + this.vlm_per * b; },
+    act(b) { return this.act_fixed + this.act_per * b; },
+  }, o);
+
+  class Sim {
+    constructor(robots, lat, policy, stalls = []) {
+      Object.assign(this, { robots, lat, policy });
+      this.stalls = stalls.slice().sort((a, b) => a[0] - b[0]);
+      this.nextRel = robots.map(r => r.phase);
+      this.nextVlm = robots.map(r => (r.vlm_period ? r.phase : Infinity));
+      this.planT0 = robots.map(() => 0);
+      this.inFlight = robots.map(() => false);
+      this.pending = []; this.vlmQueue = []; this.vlmBatch = null; this.trace = [];
+      this.stats = robots.map(() => ({ hist: new Float64Array(NB), held: 0, jobs: 0, late: 0, dropped: 0 }));
+    }
+    period(i) { const r = this.robots[i]; return r.chunk / r.hz; }
+    nextEvent() {
+      let m = Infinity;
+      for (let i = 0; i < this.robots.length; i++) m = Math.min(m, this.nextRel[i], this.nextVlm[i]);
+      return m;
+    }
+    release(t) {
+      for (let i = 0; i < this.robots.length; i++) {
+        const P = this.period(i);
+        while (this.nextRel[i] <= t + 1e-12) {
+          this.pending.push([this.nextRel[i] + P, i]); this.stats[i].jobs++; this.nextRel[i] += P;
+        }
+        while (this.nextVlm[i] <= t + 1e-12) {
+          this.vlmQueue.push([this.nextVlm[i], i]); this.nextVlm[i] += this.robots[i].vlm_period;
+        }
+      }
+      const keep = [];
+      for (const [d, i] of this.pending) {
+        if (d <= t) { this.stats[i].dropped++; this.stats[i].held += this.robots[i].chunk; }
+        else keep.push([d, i]);
+      }
+      this.pending = keep;
+    }
+    sortPending() { this.pending.sort((a, b) => a[0] - b[0] || a[1] - b[1]); }
+    runActions(t, jobs) {
+      const tEnd = t + this.lat.act(jobs.length);
+      for (const [d, i] of jobs) {
+        const r = this.robots[i], st = this.stats[i];
+        for (let k = 0; k < r.chunk; k++) {
+          const age = tEnd + k / r.hz - this.planT0[i];
+          st.hist[Math.min(Math.trunc(age / BIN), NB - 1)]++;
+        }
+        if (tEnd > d + 1e-12) st.late++;
+      }
+      this.trace.push(["act", t, tEnd, jobs.length]);
+      return tEnd;
+    }
+    startVlm(rids, t0s) {
+      this.vlmBatch = [rids, t0s, this.lat.vlm(rids.length)];
+      for (const i of rids) this.inFlight[i] = true;
+    }
+    runVlmSlice(t, q) {
+      const [rids, t0s, rem] = this.vlmBatch, work = Math.min(rem, q);
+      const tEnd = t + work + (isFinite(q) ? this.lat.slice_overhead : 0);
+      this.vlmBatch[2] = rem - work;
+      this.trace.push(["vlm", t, tEnd, rids.length]);
+      if (this.vlmBatch[2] <= 1e-12) {
+        rids.forEach((i, k) => { this.planT0[i] = Math.max(this.planT0[i], t0s[k]); this.inFlight[i] = false; });
+        this.vlmBatch = null;
+      }
+      return tEnd;
+    }
+    run(horizon) {
+      let t = 0;
+      while (t < horizon) {
+        if (this.stalls.length && this.stalls[0][0] <= t) {
+          const [s0, dur] = this.stalls.shift();
+          this.trace.push(["stall", t, Math.max(t, s0 + dur), 0]);
+          t = Math.max(t, s0 + dur); continue;
+        }
+        this.release(t);
+        const tn = this.policy.step(this, t);
+        t = tn > t ? tn : Math.max(this.nextEvent(), t + 1e-6);
+      }
+      return this.metrics();
+    }
+    metrics() {
+      let jobs = 0, miss = 0, tot = 0, sum = 0;
+      const hist = new Float64Array(NB);
+      for (const s of this.stats) {
+        jobs += s.jobs; miss += s.late + s.dropped;
+        for (let k = 0; k < NB; k++) hist[k] += s.hist[k];
+      }
+      for (let k = 0; k < NB; k++) { tot += hist[k]; sum += hist[k] * k * BIN; }
+      let c = 0, p99 = 0;
+      for (let k = 0; k < NB; k++) { c += hist[k]; if (c >= 0.99 * tot) { p99 = k * BIN; break; } }
+      return { miss_rate: miss / Math.max(jobs, 1), mean_staleness: sum / Math.max(tot, 1), p99_staleness: p99, jobs, hist };
+    }
+    success(models, hMiss = 0.05) {
+      return this.robots.map((r, i) => {
+        const m = models[r.task], st = this.stats[i];
+        let steps = st.held, hz = hMiss * st.held;
+        for (let k = 0; k < NB; k++) { steps += st.hist[k]; hz += m.hEdges[k] * st.hist[k]; }
+        return steps ? Math.exp(-m.horizon * hz / steps) : 1;
+      });
+    }
+  }
+
+  class ChronosPolicy {
+    constructor(o = {}) {
+      Object.assign(this, { q: 0.010, maxBatch: 64, guard: 0.002, models: null, maxAge: 1.0, minBatch: 4 }, o);
+    }
+    gain(sim, t, i, L) {
+      const m = this.models[sim.robots[i].task], age = t - sim.planT0[i];
+      let g = -Infinity;
+      for (const k of [1, 2]) g = Math.max(g, m.hazard(age + k * L) - m.hazard(k * L));
+      return g;
+    }
+    select(sim, t, idle) {
+      const cap = Math.min(this.maxBatch, sim.lat.max_vlm_batch);
+      idle.sort((a, b) => sim.planT0[a] - sim.planT0[b] || a - b);
+      if (!this.models) return idle.slice(0, cap);
+      const L = sim.lat.vlm(Math.min(idle.length, cap)), g = {};
+      for (const i of idle) g[i] = this.gain(sim, t, i, L);
+      const need = idle.filter(i => g[i] > 1e-9 || t - sim.planT0[i] >= this.maxAge);
+      need.sort((a, b) => g[b] - g[a]);
+      return (need.length ? need : idle.slice(0, this.minBatch)).slice(0, cap);
+    }
+    step(sim, t) {
+      const n = sim.robots.length;
+      if (sim.vlmBatch === null) {
+        const idle = [];
+        for (let i = 0; i < n; i++) if (!sim.inFlight[i]) idle.push(i);
+        if (idle.length) { const pick = this.select(sim, t, idle); sim.startVlm(pick, pick.map(() => t)); }
+      }
+      const worst = sim.lat.act(n);
+      if (sim.pending.length) {
+        let d = Infinity;
+        for (const [dd] of sim.pending) d = Math.min(d, dd);
+        const lax = d - t - worst - this.guard;
+        if (sim.vlmBatch && lax >= this.q + sim.lat.slice_overhead) return sim.runVlmSlice(t, this.q);
+        if (!sim.vlmBatch && lax > 0) return Math.min(sim.nextEvent(), d - worst - this.guard);
+        sim.sortPending();
+        const jobs = sim.pending.slice(0, this.maxBatch);
+        sim.pending = sim.pending.slice(this.maxBatch);
+        return sim.runActions(t, jobs);
+      }
+      if (sim.vlmBatch) return sim.runVlmSlice(t, Math.min(this.q, Math.max(sim.nextEvent() - t, 1e-4)));
+      return sim.nextEvent();
+    }
+  }
+
+  class FifoPolicy {
+    constructor(o = {}) { this.maxBatch = o.maxBatch || 64; }
+    step(sim, t) {
+      const heads = [];
+      if (sim.pending.length) {
+        let r = Infinity;
+        for (const [d, i] of sim.pending) r = Math.min(r, d - sim.period(i));
+        heads.push([r, "act"]);
+      }
+      if (sim.vlmQueue.length) heads.push([sim.vlmQueue[0][0], "vlm"]);
+      if (!heads.length) return sim.nextEvent();
+      heads.sort((a, b) => a[0] - b[0] || (a[1] < b[1] ? -1 : 1));
+      if (heads[0][1] === "act") {
+        sim.sortPending();
+        const jobs = sim.pending.slice(0, this.maxBatch);
+        sim.pending = sim.pending.slice(this.maxBatch);
+        return sim.runActions(t, jobs);
+      }
+      const cap = Math.min(this.maxBatch, sim.lat.max_vlm_batch);
+      const batch = sim.vlmQueue.slice(0, cap);
+      sim.vlmQueue = sim.vlmQueue.slice(cap);
+      sim.startVlm(batch.map(b => b[1]), batch.map(b => b[0]));
+      return sim.runVlmSlice(t, Infinity);
+    }
+  }
+
+  const api = { Sim, ChronosPolicy, FifoPolicy, hazardModel, Lat };
+  root.Chronos = api;
+  if (typeof module !== "undefined") module.exports = api;
+})(typeof window !== "undefined" ? window : globalThis);
+</script>
+<script>
+const DATA = {"models":{"conveyor":{"edges":[0.0,0.05,0.1,0.2,0.3,0.5,0.75,1.0,1.5,2.0,3.0,5.0,1000000000.0],"h":[0.0,0.0,0.0,0.0,0.0,0.0007946522814787489,0.007930507096305111,0.007930507096305111,0.0124733359439729,0.0124733359439729,0.03841474277388319,0.03941474277123482],"horizon":30.242592592592594},"shelf":{"edges":[0.0,0.05,0.1,0.2,0.3,0.5,0.75,1.0,1.5,2.0,3.0,5.0,1000000000.0],"h":[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.000999999999925926],"horizon":5.817592592592592}},"curves":{"conveyor":{"s":[0.0,0.05,0.1,0.15,0.2,0.25,0.3,0.35,0.4,0.45,0.5,0.55,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.95,1.0,1.05,1.1,1.15,1.2,1.25,1.3,1.35,1.4,1.45,1.5,1.55,1.6,1.65,1.7,1.75,1.8,1.85,1.9,1.95,2.0,2.05,2.1,2.15,2.2,2.25,2.3,2.35,2.4,2.45,2.5,2.55,2.6,2.65,2.7,2.75,2.8,2.85,2.9,2.95,3.0],"p":[1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,0.9763,0.9763,0.9763,0.9763,0.9763,0.7868,0.7868,0.7868,0.7868,0.7868,0.7868,0.7868,0.7868,0.7868,0.7868,0.7868,0.7868,0.7868,0.7868,0.7868,0.6858,0.6858,0.6858,0.6858,0.6858,0.6858,0.6858,0.6858,0.6858,0.6858,0.6858,0.6858,0.6858,0.6858,0.6858,0.6858,0.6858,0.6858,0.6858,0.6858,0.6858,0.6858,0.6858,0.6858,0.6858,0.6858,0.6858,0.6858,0.6858,0.6858,0.3129]},"shelf":{"s":[0.0,0.05,0.1,0.15,0.2,0.25,0.3,0.35,0.4,0.45,0.5,0.55,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.95,1.0,1.05,1.1,1.15,1.2,1.25,1.3,1.35,1.4,1.45,1.5,1.55,1.6,1.65,1.7,1.75,1.8,1.85,1.9,1.95,2.0,2.05,2.1,2.15,2.2,2.25,2.3,2.35,2.4,2.45,2.5,2.55,2.6,2.65,2.7,2.75,2.8,2.85,2.9,2.95,3.0],"p":[1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0]}},"sweep":{"CHRONOS (curve-aware)":[{"miss_rate":0.0,"mean_staleness":0.07484848484848484,"p99_staleness":0.1,"jobs":100,"success":1.0,"n":1},{"miss_rate":0.0,"mean_staleness":0.0911,"p99_staleness":0.12,"jobs":200,"success":1.0,"n":2},{"miss_rate":0.0,"mean_staleness":0.1164,"p99_staleness":0.14,"jobs":400,"success":1.0,"n":4},{"miss_rate":0.0,"mean_staleness":0.14904161412358133,"p99_staleness":0.22,"jobs":800,"success":1.0,"n":8},{"miss_rate":0.0,"mean_staleness":0.19100755667506297,"p99_staleness":0.31,"jobs":1200,"success":1.0,"n":12},{"miss_rate":0.0,"mean_staleness":0.2648708254568368,"p99_staleness":0.62,"jobs":1599,"success":1.0,"n":16},{"miss_rate":0.0,"mean_staleness":0.47366819508128394,"p99_staleness":1.27,"jobs":2399,"success":1.0,"n":24},{"miss_rate":0.0,"mean_staleness":0.5599560715406339,"p99_staleness":1.42,"jobs":3199,"success":1.0,"n":32},{"miss_rate":0.0,"mean_staleness":0.599922032193159,"p99_staleness":1.46,"jobs":3997,"success":0.998492025956093,"n":40},{"miss_rate":0.0,"mean_staleness":0.7267843710823234,"p99_staleness":1.61,"jobs":4797,"success":0.9962211449382666,"n":48},{"miss_rate":0.0,"mean_staleness":0.777637893982808,"p99_staleness":1.62,"jobs":5598,"success":0.9800074562658317,"n":56},{"miss_rate":0.0,"mean_staleness":0.914286838790932,"p99_staleness":1.92,"jobs":6396,"success":0.9596675287349618,"n":64},{"miss_rate":0.0,"mean_staleness":1.0621633831095496,"p99_staleness":2.18,"jobs":7995,"success":0.9188362454701512,"n":80},{"miss_rate":0.0,"mean_staleness":1.3448638497652583,"p99_staleness":2.89,"jobs":9585,"success":0.9028975630177015,"n":96}],"CHRONOS (curve-blind)":[{"miss_rate":0.0,"mean_staleness":0.07484848484848484,"p99_staleness":0.1,"jobs":100,"success":1.0,"n":1},{"miss_rate":0.0,"mean_staleness":0.0911,"p99_staleness":0.12,"jobs":200,"success":1.0,"n":2},{"miss_rate":0.0,"mean_staleness":0.1164,"p99_staleness":0.14,"jobs":400,"success":1.0,"n":4},{"miss_rate":0.0,"mean_staleness":0.15365699873896596,"p99_staleness":0.21,"jobs":800,"success":1.0,"n":8},{"miss_rate":0.0,"mean_staleness":0.1968513853904282,"p99_staleness":0.27,"jobs":1200,"success":1.0,"n":12},{"miss_rate":0.0,"mean_staleness":0.24224952741020797,"p99_staleness":0.33,"jobs":1599,"success":1.0,"n":16},{"miss_rate":0.0,"mean_staleness":0.33983661499790535,"p99_staleness":0.46,"jobs":2398,"success":1.0,"n":24},{"miss_rate":0.0,"mean_staleness":0.44631628490743647,"p99_staleness":0.6,"jobs":3199,"success":0.9957064937278235,"n":32},{"miss_rate":0.0,"mean_staleness":0.548467539003523,"p99_staleness":0.74,"jobs":3999,"success":0.9918729807316904,"n":40},{"miss_rate":0.0,"mean_staleness":0.6518322203672788,"p99_staleness":0.89,"jobs":4798,"success":0.9579239806085761,"n":48},{"miss_rate":0.0,"mean_staleness":0.775025981006988,"p99_staleness":1.06,"jobs":5595,"success":0.9316910128221437,"n":56},{"miss_rate":0.0,"mean_staleness":0.897338152105594,"p99_staleness":1.25,"jobs":6393,"success":0.9146975117054945,"n":64},{"miss_rate":0.0,"mean_staleness":1.0882210208700025,"p99_staleness":1.97,"jobs":7991,"success":0.8985617544626958,"n":80},{"miss_rate":0.0,"mean_staleness":1.2554402844593182,"p99_staleness":2.16,"jobs":9597,"success":0.8850909884404832,"n":96}],"FIFO batching":[{"miss_rate":0.0,"mean_staleness":0.2641,"p99_staleness":0.5,"jobs":100,"success":0.9971202729672997,"n":1},{"miss_rate":0.0,"mean_staleness":0.26705,"p99_staleness":0.5,"jobs":200,"success":0.9985601364836498,"n":2},{"miss_rate":0.0,"mean_staleness":0.270575,"p99_staleness":0.54,"jobs":400,"success":0.9984408533636421,"n":4},{"miss_rate":0.0,"mean_staleness":0.29595,"p99_staleness":0.55,"jobs":800,"success":0.9979316328979579,"n":8},{"miss_rate":0.0,"mean_staleness":0.29406666666666664,"p99_staleness":0.56,"jobs":1200,"success":0.9981013730531859,"n":12},{"miss_rate":0.004375,"mean_staleness":0.299774011299435,"p99_staleness":0.5700000000000001,"jobs":1600,"success":0.997031263912469,"n":16},{"miss_rate":0.23791666666666667,"mean_staleness":0.325599582898853,"p99_staleness":0.59,"jobs":2400,"success":0.8443468268414694,"n":24},{"miss_rate":0.3671875,"mean_staleness":0.3510903873744619,"p99_staleness":0.56,"jobs":3200,"success":0.7543298208784003,"n":32},{"miss_rate":0.48012003000750186,"mean_staleness":0.38702434625789,"p99_staleness":0.56,"jobs":3999,"success":0.6967794878967731,"n":40},{"miss_rate":0.5377240516882034,"mean_staleness":0.42379899916597175,"p99_staleness":0.58,"jobs":4798,"success":0.6717162670512188,"n":48},{"miss_rate":0.6028990694345026,"mean_staleness":0.4487842669845054,"p99_staleness":0.59,"jobs":5588,"success":0.6429176141283469,"n":56},{"miss_rate":0.7611578266494179,"mean_staleness":0.4697200447928332,"p99_staleness":0.63,"jobs":6184,"success":0.578064269241457,"n":64},{"miss_rate":0.9770187115408766,"mean_staleness":0.36072580645161295,"p99_staleness":0.66,"jobs":7963,"success":0.48837183052856653,"n":80},{"miss_rate":0.9833404527979496,"mean_staleness":0.09846153846153846,"p99_staleness":0.1,"jobs":9364,"success":0.48600397010098856,"n":96}]},"sweep_N":[1,2,4,8,12,16,24,32,40,48,56,64,80,96],"capacity":{"CHRONOS (curve-aware)":54,"CHRONOS (curve-blind)":43,"Oracle (closed form)":41,"FIFO batching (best period)":17,"Dedicated":1},"phase":{"phase lookahead":58,"current phase only":42,"curve-blind":43},"placement":{"fleet":{"shelf":300,"conveyor":100},"mixed":6,"segregated":7}};
+const C = window.Chronos;
+const MODELS = Object.fromEntries(Object.entries(DATA.models).map(([k, m]) => [k, C.hazardModel(m)]));
+const $ = id => document.getElementById(id);
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+function fleet(n, mix, hz, fifoPeriod) {
+  // deterministic phases; tasks interleaved so every prefix keeps the mix
+  let seed = 12345;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+  return Array.from({ length: n }, (_, i) => ({
+    task: Math.floor((i + 1) * mix) > Math.floor(i * mix) ? "conveyor" : "shelf",
+    hz, chunk: 1, phase: rnd() / hz, vlm_period: fifoPeriod,
+  }));
+}
+
+function simulate(cfg) {
+  const lat = C.Lat({ vlm_per: cfg.vper / 1000 });
+  const robots = fleet(cfg.n, cfg.mix, cfg.hz, cfg.pol === "fifo" ? cfg.fp : null);
+  const pol = cfg.pol === "fifo" ? new C.FifoPolicy()
+    : new C.ChronosPolicy({ q: cfg.q / 1000, models: cfg.pol === "aware" ? MODELS : null });
+  const sim = new C.Sim(robots, lat, pol, cfg.stall ? [[3.0, 0.3]] : []);
+  const m = sim.run(8.0);
+  const succ = sim.success(MODELS);
+  m.success = succ.reduce((a, b) => a + b, 0) / succ.length;
+  // reference: each task alone on its own GPU
+  const ref = {};
+  for (const t of ["shelf", "conveyor"]) {
+    const s1 = new C.Sim([{ task: t, hz: cfg.hz, chunk: 1, phase: 0, vlm_period: null }], lat, new C.ChronosPolicy({ q: cfg.q / 1000 }));
+    s1.run(8.0); ref[t] = s1.success(MODELS)[0];
+  }
+  m.ref = robots.reduce((a, r) => a + ref[r.task], 0) / robots.length;
+  m.trace = sim.trace; m.n = cfg.n;
+  return m;
+}
+
+function readCfg() {
+  return { n: +$("n").value, pol: document.querySelector("input[name=pol]:checked").value, hz: +$("hz").value,
+    mix: +$("mix").value / 100, vper: +$("vper").value, q: +$("q").value, fp: +$("fp").value, stall: $("stall").checked };
+}
+
+function setChip(el, ok) { el.className = "chip " + (ok ? "ok" : "bad"); }
+
+function render() {
+  const cfg = readCfg();
+  $("n-out").textContent = cfg.n; $("mix-out").textContent = Math.round(cfg.mix * 100) + "%";
+  $("vper-out").textContent = cfg.vper.toFixed(1) + " ms"; $("q-out").textContent = cfg.q + " ms"; $("fp-out").textContent = cfg.fp.toFixed(1) + " s";
+  $("q-field").classList.toggle("dim", cfg.pol === "fifo"); $("fp-field").classList.toggle("dim", cfg.pol !== "fifo");
+  const m = simulate(cfg);
+  const d = (m.success - m.ref) * 100;
+  $("t-miss").textContent = (m.miss_rate * 100).toFixed(m.miss_rate < 0.1 ? 2 : 1) + "%";
+  $("t-st").textContent = m.mean_staleness.toFixed(2) + " s";
+  $("t-p99").textContent = m.p99_staleness.toFixed(2) + " s";
+  $("t-succ").textContent = (m.success * 100).toFixed(1) + "%";
+  const okMiss = m.miss_rate <= 0.01, okSt = m.mean_staleness <= 1.0, okSucc = d >= -2;
+  setChip($("c-miss"), okMiss); setChip($("c-st"), okSt); setChip($("c-succ"), okSucc);
+  $("c-succ").textContent = `${d >= 0 ? "+" : "−"}${Math.abs(d).toFixed(1)} pts vs dedicated`;
+  const v = $("verdict"); const fails = [];
+  if (!okMiss) fails.push("actions miss their deadlines"); if (!okSt) fails.push("plans are too old on average");
+  if (!okSucc) fails.push("task success drops more than 2 points");
+  v.className = "verdict" + (fails.length ? " bad" : "");
+  v.textContent = fails.length ? `${cfg.n} robots breaks the SLO: ${fails.join(", ")}.`
+    : `${cfg.n} robots fit on one GPU within the SLO.`;
+  drawGantt(m); drawHist(m);
+}
+
+function drawGantt(m) {
+  const cv = $("gantt"), dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+  cv.width = W * dpr; cv.height = H * dpr;
+  const g = cv.getContext("2d"); g.scale(dpr, dpr); g.clearRect(0, 0, W, H);
+  const t0 = 2.8, t1 = 3.8, padB = 18, x = t => (t - t0) / (t1 - t0) * W, base = H - padB;
+  g.strokeStyle = css("--rule"); g.fillStyle = css("--muted"); g.font = "11px " + css("--mono");
+  for (let k = 0; k <= 10; k++) {
+    const tx = x(t0 + k * 0.1); g.beginPath(); g.moveTo(tx, 0); g.lineTo(tx, base); g.stroke();
+    if (k % 2 === 0) { g.textAlign = k === 0 ? "left" : k === 10 ? "right" : "center"; g.fillText((t0 + k * 0.1).toFixed(1) + " s", tx, H - 4); }
+  }
+  for (const [kind, a, b, bs] of m.trace) {
+    if (b < t0 || a > t1) continue;
+    const xa = Math.max(x(a), 0), w = Math.max(x(Math.min(b, t1)) - xa, 1);
+    if (kind === "stall") { g.fillStyle = css("--stall"); g.globalAlpha = 0.35; g.fillRect(xa, 0, w, base); g.globalAlpha = 1; continue; }
+    const h = Math.max(4, (base - 6) * Math.min(1, bs / Math.max(m.n, 1)));
+    g.fillStyle = css(kind === "act" ? "--act" : "--vlm"); g.fillRect(xa, base - h, w, h);
+  }
+  const busy = m.trace.filter(([k, a, b]) => k !== "stall" && b > t0 && a < t1).reduce((s, [, a, b]) => s + Math.min(b, t1) - Math.max(a, t0), 0);
+  $("gantt-cap").textContent = `One second of simulated time, from 2.8 s to 3.8 s. The GPU is busy ${(busy * 100).toFixed(0)}% of it.`;
+}
+
+function axes(svg, W, H, pad, xMax, yMax, xLab, yFmt) {
+  const X = v => pad.l + v / xMax * (W - pad.l - pad.r), Y = v => H - pad.b - v / yMax * (H - pad.t - pad.b);
+  let s = "";
+  for (let k = 0; k <= 4; k++) {
+    const yv = yMax * k / 4; s += `<line x1="${pad.l}" x2="${W - pad.r}" y1="${Y(yv)}" y2="${Y(yv)}" stroke="var(--rule)"/>`;
+    s += `<text x="${pad.l - 6}" y="${Y(yv) + 4}" text-anchor="end">${yFmt(yv)}</text>`;
+  }
+  return { X, Y, s, foot: `<text x="${(W + pad.l) / 2}" y="${H - 4}" text-anchor="middle">${xLab}</text>` };
+}
+
+function drawHist(m) {
+  const svg = $("hist"), W = 640, H = 220, pad = { l: 44, r: 12, t: 10, b: 34 }, sMax = 3;
+  const bins = 60, w = sMax / bins, counts = new Float64Array(bins);
+  let tot = 0; m.hist.forEach((c, k) => { tot += c; counts[Math.min(Math.floor(k * 0.01 / w), bins - 1)] += c; });
+  const frac = Array.from(counts, c => c / Math.max(tot, 1)), fMax = Math.max(0.05, ...frac);
+  const a = axes(svg, W, H, pad, sMax, 1, "plan age s (seconds)", v => (v * 100).toFixed(0) + "%");
+  let s = a.s;
+  frac.forEach((f, i) => { const y = a.Y(f / fMax); s += `<rect x="${a.X(i * w) + 0.5}" y="${y}" width="${a.X(w) - a.X(0) - 1}" height="${a.Y(0) - y}" fill="var(--muted)" opacity="0.55"/>`; });
+  for (const [t, col] of [["conveyor", "--fifo"], ["shelf", "--act"]]) {
+    const c = DATA.curves[t];
+    s += `<polyline fill="none" stroke="var(${col})" stroke-width="2.2" points="${c.s.map((x, i) => `${a.X(x)},${a.Y(c.p[i])}`).join(" ")}"/>`;
+  }
+  for (let k = 0; k <= 3; k++) s += `<text x="${a.X(k)}" y="${H - pad.b + 14}" text-anchor="middle">${k}</text>`;
+  $("hist-cap").textContent = `Bars show the share of control steps at each plan age, scaled so the tallest bar (${(fMax * 100).toFixed(1)}% of steps) reaches the top. Lines show the fitted success curves on the 0–100% axis. Once most of the mass sits past a curve's drop, that task starts failing.`;
+  svg.innerHTML = s + a.foot;
+}
+
+const COLORS = { "CHRONOS (curve-aware)": "--act", "CHRONOS (curve-blind)": "--vlm", "FIFO batching": "--fifo" };
+function sweepChart(id, key, yMax, fmt, ref) {
+  const W = 320, H = 200, pad = { l: 42, r: 8, t: 8, b: 30 }, Ns = DATA.sweep_N, xMax = Ns[Ns.length - 1];
+  const a = axes(null, W, H, pad, xMax, yMax, "robots on one GPU", fmt);
+  let s = a.s;
+  if (ref !== undefined) s += `<line x1="${pad.l}" x2="${W - pad.r}" y1="${a.Y(ref)}" y2="${a.Y(ref)}" stroke="var(--stall)" stroke-dasharray="4 3"/>`;
+  for (const [name, rows] of Object.entries(DATA.sweep)) {
+    const pts = rows.map((r, i) => `${a.X(Ns[i])},${a.Y(Math.min(r[key], yMax))}`).join(" ");
+    s += `<polyline fill="none" stroke="var(${COLORS[name]})" stroke-width="2" points="${pts}"/>`;
+    const last = rows[rows.length - 1]; s += `<circle cx="${a.X(xMax)}" cy="${a.Y(Math.min(last[key], yMax))}" r="3" fill="var(${COLORS[name]})"/>`;
+  }
+  for (const n of [0, 32, 64, 96]) s += `<text x="${a.X(n)}" y="${H - pad.b + 14}" text-anchor="middle">${n}</text>`;
+  $(id).innerHTML = s + a.foot;
+}
+
+function renderStatic() {
+  const ref = DATA.sweep["CHRONOS (curve-aware)"][0].success - 0.02;
+  sweepChart("sw-succ", "success", 1, v => (v * 100).toFixed(0) + "%", ref);
+  sweepChart("sw-miss", "miss_rate", 1, v => (v * 100).toFixed(0) + "%", 0.01);
+  sweepChart("sw-st", "mean_staleness", 2, v => v.toFixed(1), 1.0);
+  $("sw-legend").innerHTML = Object.keys(COLORS).map(k => `<span><i style="background:var(${COLORS[k]})"></i>${k}</span>`).join("")
+    + `<span><i style="background:var(--stall)"></i>SLO limit</span>`;
+  const cap = DATA.capacity, mx = Math.max(...Object.values(cap));
+  $("cap-table").innerHTML = "<tr><th>Scheduler</th><th></th><th style='text-align:right'>Robots</th></tr>" + Object.entries(cap).map(([k, v]) =>
+    `<tr><td>${k}</td><td style="width:40%"><div class="bar" style="width:${v / mx * 100}%;background:var(${k.startsWith("FIFO") ? "--fifo" : k.startsWith("Oracle") ? "--vlm" : k === "Dedicated" ? "--muted" : "--act"})"></div></td><td class="n">${v}</td></tr>`).join("");
+  const ph = DATA.phase, pl = DATA.placement;
+  $("more-table").innerHTML = `<tr><th>Experiment</th><th style='text-align:right'>Result</th></tr>
+    <tr><td>Pick cycle (4 s transit, 2 s grasp): refresh <b>ahead</b> of the grasp phase</td><td class="n">${ph["phase lookahead"]} robots</td></tr>
+    <tr><td>Same cycle, curve-aware but reacting to the current phase only</td><td class="n">${ph["current phase only"]} robots</td></tr>
+    <tr><td>Same cycle, curve-blind</td><td class="n">${ph["curve-blind"]} robots</td></tr>
+    <tr><td>${pl.fleet.shelf + pl.fleet.conveyor}-robot fleet, task types mixed on every GPU</td><td class="n">${pl.mixed} GPUs</td></tr>
+    <tr><td>Same fleet, one GPU pool per task type</td><td class="n">${pl.segregated} GPUs</td></tr>`;
+}
+
+let timer = null;
+$("controls").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(render, 60); });
+window.addEventListener("resize", () => { clearTimeout(timer); timer = setTimeout(render, 150); });
+renderStatic(); render();
+</script>
+
+</body>
+</html>
