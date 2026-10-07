@@ -1,0 +1,72 @@
+{
+ "rows": [
+  {
+   "n": 20,
+   "fixed": 20.0,
+   "governed": 20.0,
+   "v": 1.0
+  },
+  {
+   "n": 30,
+   "fixed": 30.0,
+   "governed": 30.0,
+   "v": 1.0
+  },
+  {
+   "n": 40,
+   "fixed": 39.59732550850664,
+   "governed": 39.59732550850664,
+   "v": 1.0
+  },
+  {
+   "n": 50,
+   "fixed": null,
+   "governed": 43.75,
+   "v": 0.75
+  },
+  {
+   "n": 60,
+   "fixed": null,
+   "governed": 51.90472651344527,
+   "v": 0.75
+  },
+  {
+   "n": 70,
+   "fixed": null,
+   "governed": null,
+   "v": null
+  },
+  {
+   "n": 80,
+   "fixed": null,
+   "governed": null,
+   "v": null
+  },
+  {
+   "n": 90,
+   "fixed": null,
+   "governed": null,
+   "v": null
+  },
+  {
+   "n": 100,
+   "fixed": null,
+   "governed": null,
+   "v": null
+  },
+  {
+   "n": 110,
+   "fixed": null,
+   "governed": null,
+   "v": null
+  },
+  {
+   "n": 120,
+   "fixed": null,
+   "governed": null,
+   "v": null
+  }
+ ],
+ "best_fixed": 39.59732550850664,
+ "best_governed": 51.90472651344527
+}
