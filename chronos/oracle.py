@@ -54,8 +54,10 @@ def predict(n: int, lat: LatencyModel, hz=10.0, chunk=1, quantum=0.010, guard=0.
 
 def predict_success(pred: dict, model, h_miss=0.05, schedulable_penalty=True) -> float:
     s = np.linspace(pred["s_lo"], pred["s_hi"], 64)
-    p = float(np.exp(-model.horizon * model.hazard(s).mean()))
-    return p if pred["schedulable"] or not schedulable_penalty else p * math.exp(-model.horizon * h_miss)
+    p = float(model.from_rate(model.hazard(s).mean()))
+    if pred["schedulable"] or not schedulable_penalty:
+        return p
+    return p * float(model.from_rate(h_miss)) if model.kind == "ruin" else 0.0
 
 
 def fast_capacity(templates, models, lat=LatencyModel(), slo=None, ref=None, n_max=1024, **kw):
@@ -63,13 +65,16 @@ def fast_capacity(templates, models, lat=LatencyModel(), slo=None, ref=None, n_m
     from .admission import SLO
     slo = slo or SLO()
     hz, chunk = templates[0].hz, templates[0].chunk
-    ref = ref if ref is not None else np.mean(
-        [predict_success(predict(1, lat, hz, chunk, **kw), models[t.task]) for t in templates])
+    ref_t = {t.task: predict_success(predict(1, lat, hz, chunk, **kw), models[t.task]) for t in templates}
+    ref = ref if ref is not None else float(np.mean([ref_t[t.task] for t in templates]))
     best = 0
     for n in range(1, n_max + 1):
         p = predict(n, lat, hz, chunk, **kw)
-        succ = np.mean([predict_success(p, models[templates[i % len(templates)].task]) for i in range(n)])
-        if p["schedulable"] and p["mean_staleness"] <= slo.s_max and succ >= ref - slo.delta:
+        per = [predict_success(p, models[templates[i % len(templates)].task]) for i in range(n)]
+        refs = [ref_t[templates[i % len(templates)].task] for i in range(n)]
+        loss_tail = float(np.quantile(np.subtract(per, refs), slo.tail_q))
+        if (p["schedulable"] and p["mean_staleness"] <= slo.s_max and np.mean(per) >= ref - slo.delta
+                and loss_tail >= -slo.delta_tail):
             best = n
         elif n > best + 8:
             break

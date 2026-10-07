@@ -42,9 +42,16 @@ class LatencyModel:
     max_vlm_batch: int = 64         # memory cap: KV cache / activations
     net_base: float = 0.0           # one-way robot <-> server latency (s)
     net_jitter: float = 0.0         # extra uniform(0, jitter) per message
+    act_steps: int = 16             # nominal denoising steps of the action head
+    # extra per-control-step hazard when the head runs with fewer steps.
+    # ASSUMED placeholder, not fitted: measure success vs K for your head.
+    denoise_hazard: dict = field(default_factory=lambda: {16: 0.0, 8: 2e-4, 4: 1e-3, 2: 5e-3})
 
     def vlm(self, b): return self.vlm_fixed + self.vlm_per * b
-    def act(self, b): return self.act_fixed + self.act_per * b
+
+    def act(self, b, k=None):
+        """Action-head batch latency; cost scales with denoising steps k."""
+        return (self.act_fixed + self.act_per * b) * ((k or self.act_steps) / self.act_steps)
 
     @classmethod
     def from_json(cls, text: str) -> "LatencyModel":
@@ -84,6 +91,7 @@ class Robot:
 @dataclass
 class RobotStats:
     hist: dict = field(default_factory=dict)    # task -> staleness histogram
+    extra: dict = field(default_factory=dict)   # task -> summed extra hazard (reduced denoising)
     held: dict = field(default_factory=dict)    # task -> steps with no fresh action
     jobs: int = 0
     late: int = 0
@@ -158,12 +166,16 @@ class Simulator:
         self.pending = keep
 
     # --- GPU launches ---------------------------------------------------
-    def run_actions(self, t, jobs):
-        t_end = t + self.lat.act(len(jobs))
+    def run_actions(self, t, jobs, k=None):
+        t_end = t + self.lat.act(len(jobs), k)
+        dh = self.lat.denoise_hazard.get(k, 0.0) if k else 0.0
         for d, i in jobs:
             r, st = self.robots[i], self.stats[i]
             arrive = t_end + self.net()
-            st.add(r.task_at(arrive), arrive + np.arange(r.chunk) / r.hz - self.plan_t0[i])
+            task = r.task_at(arrive)
+            st.add(task, arrive + np.arange(r.chunk) / r.hz - self.plan_t0[i])
+            if dh:
+                st.extra[task] = st.extra.get(task, 0.0) + dh * r.chunk
             st.late += arrive > d + 1e-12
         if self.record:
             self.trace.append(("act", t, t_end, len(jobs)))
@@ -216,20 +228,21 @@ class Simulator:
                 "jobs": jobs}
 
     def success(self, models: dict, h_miss: float = 0.05) -> np.ndarray:
-        """Per-robot predicted success. Each task (or phase) the robot visits
-        contributes horizon_task * mean step hazard in that task; held steps
-        (dropped jobs) carry hazard `h_miss` (assumed, not fitted)."""
+        """Per-robot predicted success: the product over the tasks (phases) a
+        robot visits of that task's episode success under its staleness
+        histogram (HazardModel.episode_success). Held (dropped) steps carry
+        `h_miss` under ruin models (assumed, not fitted)."""
         out = []
         for st in self.stats:
-            total = 0.0
+            p = 1.0
             for task in set(st.hist) | set(st.held):
                 m = models[task]
                 h = st.hist.get(task, np.zeros(len(HIST_EDGES)))
-                held = st.held.get(task, 0)
-                steps = h.sum() + held
-                if steps:
-                    total += m.horizon * ((m.hazard(HIST_EDGES) * h).sum() + h_miss * held) / steps
-            out.append(math.exp(-total))
+                p *= m.episode_success((m.hazard(HIST_EDGES) * h).sum(), h.sum(),
+                                       st.held.get(task, 0), h_miss)
+                if st.extra.get(task):                 # reduced-quality actions (elastic head)
+                    p *= math.exp(-m.horizon * st.extra[task] / max(h.sum(), 1))
+            out.append(p)
         return np.array(out)
 
 
@@ -249,9 +262,37 @@ class ChronosPolicy:
     """
 
     def __init__(self, quantum=0.010, max_batch=64, guard=0.002, models=None,
-                 max_age=1.0, min_batch=4, lookahead=True):
+                 max_age=1.0, min_batch=4, lookahead=True, index="greedy", elastic=False):
         self.q, self.max_batch, self.guard, self.models = quantum, max_batch, guard, models
         self.max_age, self.min_batch, self.lookahead = max_age, min_batch, lookahead
+        self.index = index            # "greedy" (one-step gain) or "whittle"
+        self.elastic = elastic        # cut denoising steps instead of missing a deadline
+
+    def _steps(self, sim, t, jobs):
+        """Elastic head: the largest denoising-step count that still meets the
+        earliest deadline in the batch (None = nominal)."""
+        if not self.elastic:
+            return None
+        d = jobs[0][0] - sim.lat.net_base - sim.lat.net_jitter
+        for k in sorted(sim.lat.denoise_hazard, reverse=True):
+            if t + sim.lat.act(len(jobs), k) <= d:
+                return None if k == sim.lat.act_steps else k
+        return min(sim.lat.denoise_hazard)
+
+    def _whittle(self, sim, t, i, lat):
+        """Whittle index of refreshing robot i now (restless-bandit view).
+
+        Refreshing every tau seconds with landing latency L gives average cost
+        J(tau) = (int_L^{L+tau} c(u) du + lambda) / tau. The refresh price at
+        which tau = a (current plan age) is optimal is
+            W(a) = a c(a+L) - int_L^{a+L} c(u) du      (>= 0 for nondecreasing c),
+        the continuous analogue of the age-of-information Whittle index. Cost
+        c is weighted by the task's exposure (horizon) so tasks are comparable."""
+        r, a = sim.robots[i], t - sim.plan_t0[i]
+        m = self.models[r.task_at(t + lat if self.lookahead else t)]
+        u = np.linspace(lat, a + lat, 32)
+        c = m.cost(u) - m.cost(lat)                     # shift so c(L) = 0; W is shift-invariant
+        return float(m.horizon * (a * c[-1] - np.trapezoid(c, u)))
 
     def _gain(self, sim, t, i, lat):
         """Hazard reduction from refreshing now. With lookahead, the new plan
@@ -259,8 +300,8 @@ class ChronosPolicy:
         worst task over that window."""
         r, age = sim.robots[i], t - sim.plan_t0[i]
         ks = (1, 2) if self.lookahead else (0,)
-        return max(float(self.models[r.task_at(t + k * lat)].hazard(age + max(k, 1) * lat)
-                         - self.models[r.task_at(t + k * lat)].hazard(max(k, 1) * lat)) for k in ks)
+        return max(float(self.models[r.task_at(t + k * lat)].cost(age + max(k, 1) * lat)
+                         - self.models[r.task_at(t + k * lat)].cost(max(k, 1) * lat)) for k in ks)
 
     def _select(self, sim, t, idle):
         cap = min(self.max_batch, sim.lat.max_vlm_batch)
@@ -268,7 +309,8 @@ class ChronosPolicy:
         if not self.models:
             return idle[:cap]
         lat = sim.lat.vlm(min(len(idle), cap))
-        gain = {i: self._gain(sim, t, i, lat) for i in idle}
+        score = self._whittle if self.index == "whittle" else self._gain
+        gain = {i: score(sim, t, i, lat) for i in idle}
         need = [i for i in idle if gain[i] > 1e-9 or t - sim.plan_t0[i] >= self.max_age]
         need.sort(key=lambda i: -gain[i])
         return (need or idle[: self.min_batch])[:cap]
@@ -285,11 +327,11 @@ class ChronosPolicy:
             laxity = d - t - worst_case - self.guard
             if sim.vlm_batch and laxity >= self.q + sim.lat.slice_overhead:
                 return sim.run_vlm_slice(t, self.q)
-            if not sim.vlm_batch and laxity > 0:
+            if not sim.vlm_batch and laxity > 1e-9:          # tolerance: a 1e-17 'wait' would skip the job
                 return min(sim.next_event(), d - worst_case - self.guard)
             sim.pending.sort()
             jobs, sim.pending = sim.pending[: self.max_batch], sim.pending[self.max_batch:]
-            return sim.run_actions(t, jobs)
+            return sim.run_actions(t, jobs, self._steps(sim, t, jobs))
         if sim.vlm_batch:
             q = min(self.q, max(sim.next_event() - t, 1e-4))
             return sim.run_vlm_slice(t, q)

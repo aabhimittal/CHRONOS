@@ -55,7 +55,11 @@ def run_episode(env: Env, policy: DualSystemPolicy, refresh_steps: int,
         while pending and pending[0][0] <= t:
             _, plan_step, plan = pending.pop(0)
         ages.append((t - plan_step) / env.hz)
-        obs, success = env.step(policy.act(obs, plan))
+        if getattr(policy, "wants_age", False):            # chunked policies index by age
+            action = policy.act(obs, plan, t - plan_step)
+        else:
+            action = policy.act(obs, plan)
+        obs, success = env.step(action)
         history.append(obs)
         if success:
             break
