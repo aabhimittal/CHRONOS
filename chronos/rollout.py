@@ -40,10 +40,15 @@ class Rollout:
     success: bool
     refresh_steps: int
     latency_steps: int
+    held: int = 0           # steps where the action was dropped and the last one repeated
 
 
 def run_episode(env: Env, policy: DualSystemPolicy, refresh_steps: int,
-                latency_steps: int, seed: int) -> Rollout:
+                latency_steps: int, seed: int, drop_prob: float = 0.0) -> Rollout:
+    """drop_prob: chance each step's action is lost (deadline miss); the robot
+    repeats its previous command. Used to fit the cost of a miss (h_miss)."""
+    rng = np.random.default_rng(seed + 7919)
+    held, last = 0, None
     obs = env.reset(seed)
     history = [obs]
     plan, plan_step = policy.plan(obs), 0     # warm start: fresh plan at t=0
@@ -55,21 +60,29 @@ def run_episode(env: Env, policy: DualSystemPolicy, refresh_steps: int,
         while pending and pending[0][0] <= t:
             _, plan_step, plan = pending.pop(0)
         ages.append((t - plan_step) / env.hz)
-        obs, success = env.step(policy.act(obs, plan))
+        if getattr(policy, "wants_age", False):            # chunked policies index by age
+            action = policy.act(obs, plan, t - plan_step)
+        else:
+            action = policy.act(obs, plan)
+        if last is not None and drop_prob and rng.random() < drop_prob:
+            action, held = last, held + 1
+        last = action
+        obs, success = env.step(action)
         history.append(obs)
         if success:
             break
-    return Rollout(np.array(ages), success, refresh_steps, latency_steps)
+    return Rollout(np.array(ages), success, refresh_steps, latency_steps, held)
 
 
 def sweep(env: Env, policy: DualSystemPolicy, refresh_grid, latency_grid,
-          episodes: int, seed: int = 0) -> list[Rollout]:
+          episodes: int, seed: int = 0, drop_grid=(0.0,)) -> list[Rollout]:
     out, s = [], seed
     for k in refresh_grid:
         for lat in latency_grid:
-            for _ in range(episodes):
-                out.append(run_episode(env, policy, k, lat, s))
-                s += 1
+            for dp in drop_grid:
+                for _ in range(episodes):
+                    out.append(run_episode(env, policy, k, lat, s, dp))
+                    s += 1
     return out
 
 

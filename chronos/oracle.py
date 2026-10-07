@@ -54,8 +54,10 @@ def predict(n: int, lat: LatencyModel, hz=10.0, chunk=1, quantum=0.010, guard=0.
 
 def predict_success(pred: dict, model, h_miss=0.05, schedulable_penalty=True) -> float:
     s = np.linspace(pred["s_lo"], pred["s_hi"], 64)
-    p = float(np.exp(-model.horizon * model.hazard(s).mean()))
-    return p if pred["schedulable"] or not schedulable_penalty else p * math.exp(-model.horizon * h_miss)
+    p = float(model.from_rate(model.hazard(s).mean()))
+    if pred["schedulable"] or not schedulable_penalty:
+        return p
+    return p * float(model.from_rate(h_miss)) if model.kind == "ruin" else 0.0
 
 
 def fast_capacity(templates, models, lat=LatencyModel(), slo=None, ref=None, n_max=1024, **kw):
@@ -63,14 +65,42 @@ def fast_capacity(templates, models, lat=LatencyModel(), slo=None, ref=None, n_m
     from .admission import SLO
     slo = slo or SLO()
     hz, chunk = templates[0].hz, templates[0].chunk
-    ref = ref if ref is not None else np.mean(
-        [predict_success(predict(1, lat, hz, chunk, **kw), models[t.task]) for t in templates])
+    ref_t = {t.task: predict_success(predict(1, lat, hz, chunk, **kw), models[t.task]) for t in templates}
+    ref = ref if ref is not None else float(np.mean([ref_t[t.task] for t in templates]))
     best = 0
     for n in range(1, n_max + 1):
         p = predict(n, lat, hz, chunk, **kw)
-        succ = np.mean([predict_success(p, models[templates[i % len(templates)].task]) for i in range(n)])
-        if p["schedulable"] and p["mean_staleness"] <= slo.s_max and succ >= ref - slo.delta:
+        per = [predict_success(p, models[templates[i % len(templates)].task]) for i in range(n)]
+        refs = [ref_t[templates[i % len(templates)].task] for i in range(n)]
+        loss_tail = float(np.quantile(np.subtract(per, refs), slo.tail_q))
+        if (p["schedulable"] and p["mean_staleness"] <= slo.s_max and np.mean(per) >= ref - slo.delta
+                and loss_tail >= -slo.delta_tail):
             best = n
         elif n > best + 8:
             break
     return best
+
+
+def admissible(task_counts: dict, models, lat=LatencyModel(), slo=None, hz=10.0, chunk=1,
+               calibration=1.0, **kw) -> bool:
+    """Would a fleet with this task mix meet the SLO? (closed form, microseconds)
+
+    The oracle models curve-blind refresh, so it is conservative for the
+    curve-aware scheduler. `calibration` = simulated capacity / oracle
+    capacity, measured offline; the VLM-side prediction is then evaluated at
+    n / calibration. The action-path schedulability test always uses the true n."""
+    from .admission import SLO
+    slo = slo or SLO()
+    n = sum(task_counts.values())
+    if n == 0:
+        return True
+    p = predict(max(1, int(round(n / calibration))), lat, hz, chunk, **kw)
+    p["schedulable"] = predict(n, lat, hz, chunk, **kw)["schedulable"]
+    p1 = predict(1, lat, hz, chunk, **kw)
+    per = {t: predict_success(p, models[t]) for t in task_counts}
+    ref = {t: predict_success(p1, models[t]) for t in task_counts}
+    mean = sum(c * per[t] for t, c in task_counts.items()) / n
+    mean_ref = sum(c * ref[t] for t, c in task_counts.items()) / n
+    worst = min(per[t] - ref[t] for t, c in task_counts.items() if c)
+    return bool(p["schedulable"] and p["mean_staleness"] <= slo.s_max and mean >= mean_ref - slo.delta
+                and worst >= -slo.delta_tail)

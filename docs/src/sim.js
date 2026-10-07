@@ -12,7 +12,10 @@
       return m.h[Math.min(Math.max(lo - 1, 0), m.h.length - 1)];
     };
     const hEdges = Float64Array.from({ length: NB }, (_, k) => hazard(k * BIN));
-    return { hazard, hEdges, horizon: m.horizon, p: s => Math.exp(-m.horizon * hazard(s)) };
+    const kind = m.kind || "ruin";
+    const fromRate = r => (kind === "ruin" ? Math.exp(-m.horizon * r) : -Math.expm1(-m.horizon * r));
+    const cost = s => (kind === "ruin" ? hazard(s) : -hazard(s));
+    return { hazard, cost, hEdges, kind, fromRate, horizon: m.horizon, p: s => fromRate(hazard(s)) };
   }
 
   const Lat = (o = {}) => Object.assign({
@@ -114,9 +117,9 @@
     success(models, hMiss = 0.05) {
       return this.robots.map((r, i) => {
         const m = models[r.task], st = this.stats[i];
-        let steps = st.held, hz = hMiss * st.held;
+        let steps = st.held, hz = m.kind === "ruin" ? hMiss * st.held : 0;
         for (let k = 0; k < NB; k++) { steps += st.hist[k]; hz += m.hEdges[k] * st.hist[k]; }
-        return steps ? Math.exp(-m.horizon * hz / steps) : 1;
+        return steps ? m.fromRate(hz / steps) : 1;
       });
     }
   }
@@ -128,7 +131,7 @@
     gain(sim, t, i, L) {
       const m = this.models[sim.robots[i].task], age = t - sim.planT0[i];
       let g = -Infinity;
-      for (const k of [1, 2]) g = Math.max(g, m.hazard(age + k * L) - m.hazard(k * L));
+      for (const k of [1, 2]) g = Math.max(g, m.cost(age + k * L) - m.cost(k * L));
       return g;
     }
     select(sim, t, idle) {
@@ -154,7 +157,7 @@
         for (const [dd] of sim.pending) d = Math.min(d, dd);
         const lax = d - t - worst - this.guard;
         if (sim.vlmBatch && lax >= this.q + sim.lat.slice_overhead) return sim.runVlmSlice(t, this.q);
-        if (!sim.vlmBatch && lax > 0) return Math.min(sim.nextEvent(), d - worst - this.guard);
+        if (!sim.vlmBatch && lax > 1e-9) return Math.min(sim.nextEvent(), d - worst - this.guard);
         sim.sortPending();
         const jobs = sim.pending.slice(0, this.maxBatch);
         sim.pending = sim.pending.slice(this.maxBatch);

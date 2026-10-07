@@ -9,7 +9,7 @@ import pathlib
 
 import numpy as np
 
-from chronos.hazard import fit_hazard
+from chronos.hazard import save_rollouts, select_kind
 from chronos.rollout import ConveyorReach, OraclePlanner, sweep
 
 TOY_TASKS = {"shelf": 0.05, "conveyor": 0.15}   # target speed, units/s
@@ -24,7 +24,12 @@ out.mkdir(exist_ok=True)
 probe = [0, .1, .2, .3, .5, 1, 2, 3]
 print("task      " + " ".join(f"s={s:<4}" for s in probe))
 for task, speed in TOY_TASKS.items():
-    rolls = sweep(ConveyorReach(speed), OraclePlanner(), [1, 2, 4, 8, 16, 32], [0, 1, 3], args.episodes)
-    m = fit_hazard([r.staleness for r in rolls], [r.success for r in rolls], task=task)
+    # latency grid must cover the plan latencies the scheduler produces
+    # (0.05-0.5 s here); an earlier {0, 1, 3}-step grid left the model
+    # extrapolating exactly where capacity is decided
+    rolls = sweep(ConveyorReach(speed), OraclePlanner(), [1, 2, 4, 8, 16, 32], [0, 1, 2, 3, 5], args.episodes)
+    m, _ = select_kind([r.staleness for r in rolls], [r.success for r in rolls],
+                       [(r.refresh_steps, r.latency_steps) for r in rolls], task=task)
     (out / f"{task}.json").write_text(m.to_json())
-    print(f"{task:<9} " + " ".join(f"{p:.3f} " for p in m.p_success(probe)))
+    save_rollouts(out / f"rollouts_{task}.npz", rolls)     # for bootstrap CIs / validation
+    print(f"{task:<9} " + " ".join(f"{p:.3f} " for p in m.p_success(probe)) + f"  [{m.kind}]")

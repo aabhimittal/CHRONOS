@@ -40,7 +40,7 @@ def test_js_matches_python(policy, aware, n, stalls):
            "robots": [{"task": r.task, "hz": r.hz, "chunk": r.chunk, "phase": r.phase,
                        "vlm_period": r.vlm_period} for r in fleet],
            "models": {k: {"edges": [min(e, 1e9) for e in m.edges.tolist()], "h": m.h.tolist(),
-                          "horizon": m.horizon} for k, m in models.items()}}
+                          "horizon": m.horizon, "kind": m.kind} for k, m in models.items()}}
     out = subprocess.run(["node", "-e", NODE, str(ROOT / "docs/src/sim.js")], input=json.dumps(cfg),
                          capture_output=True, text=True, check=True).stdout
     js = json.loads(out)
