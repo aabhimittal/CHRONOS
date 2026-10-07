@@ -51,7 +51,11 @@ one = pre(env_pre(o))
 
 
 def batch(b):
-    return {k: (v.repeat(b, *[1] * (v.dim() - 1)) if torch.is_tensor(v) else v * b) for k, v in one.items()}
+    def rep(v):
+        if torch.is_tensor(v):
+            return v.repeat(b, *[1] * (v.dim() - 1))
+        return v * b if isinstance(v, list) else v           # task strings: one per robot; None etc. unchanged
+    return {k: rep(v) for k, v in one.items()}
 
 
 rows = []
