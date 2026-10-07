@@ -89,3 +89,12 @@ def test_reference_is_per_template():
     models = {"t": RUIN, "flat": HazardModel(EDGES, np.full(len(EDGES) - 1, 1e-5), 60)}
     ref = reference([Robot("t"), Robot("flat")], models, LatencyModel(), 4)
     assert ref.shape == (2,) and ref[1] >= ref[0]
+
+
+def test_transfer_check_flags_a_different_environment():
+    same = synth(RUIN, n_per=30, seed=1)
+    other = synth(HazardModel(EDGES, np.where(EDGES[:-1] < 0.2, 1e-4, 4e-2), 60), n_per=30, seed=2)
+    m = fit_hazard(*synth(RUIN, n_per=30)[:2])
+    from chronos.hazard import transfer_check
+    err = lambda rows: np.mean([abs(r["predicted"] - r["observed"]) for r in rows])
+    assert err(transfer_check(m, *same)) < err(transfer_check(m, *other))

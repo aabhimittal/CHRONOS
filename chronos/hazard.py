@@ -202,3 +202,20 @@ def select_kind(traces, successes, groups, **fit_kw):
     err = {k: np.mean([abs(r["predicted"] - r["observed"]) for r in rows]) for k, rows in cv.items()}
     best = min(err, key=err.get)
     return fit_hazard(traces, successes, kind=best, **fit_kw), cv
+
+
+def transfer_check(model: HazardModel, traces, successes, groups) -> list[dict]:
+    """Score a curve fitted in one environment (sim, one task) on rollouts from
+    another (hardware, another task): per refresh/latency setting, predicted vs
+    observed success. This is the sim-to-real test; without hardware it can be
+    run across tasks or suites as a weaker stand-in."""
+    y = np.asarray(successes, float)
+    out = []
+    for g in sorted(set(groups)):
+        sel = np.array([gi == g for gi in groups])
+        full = max((t for t, s in zip(traces, sel) if s), key=len)
+        obs, n = y[sel].mean(), int(sel.sum())
+        out.append({"setting": [int(v) for v in g], "n": n, "observed": float(obs),
+                    "predicted": predict_setting(model, full),
+                    "se": float(np.sqrt(max(obs * (1 - obs), 1 / n) / n))})
+    return out

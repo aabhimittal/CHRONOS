@@ -67,6 +67,9 @@ class LiberoTask:
         return self.pre(self.env_pre(o))
 
     def reset(self, seed):
+        # paired design: episode `seed` always starts from LIBERO init state `seed`,
+        # whatever the refresh/latency setting, so settings differ only in staleness
+        self.venv.envs[0].init_state_id = seed
         obs, _ = self.venv.reset(seed=seed)
         self.policy.reset()
         return obs
